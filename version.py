@@ -1,6 +1,6 @@
 """앱 버전 및 자동 업데이트 대상 저장소 정보 (단일 출처)."""
 
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 
 # 자동 업데이트: GitHub Releases 기반
 GITHUB_REPO = "hyuniiiv/BZP_Agent"
