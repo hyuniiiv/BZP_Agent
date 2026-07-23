@@ -153,12 +153,31 @@ class TrayState:
         self.last_checked: datetime | None = None
         self.last_message = "시작 중..."
         self.busy = False  # True인 동안은 경량 루프가 상태를 덮어쓰지 않음
-        # 부가 기능 상태 (트레이 메뉴 표시용)
+        # self.status = 인증(network_auth) 상태: checking/ok/fail/idle/off
+        # 부가 기능 상태 (트레이 메뉴 표시용 + 아이콘 종합 계산용)
         self.git_last: datetime | None = None
         self.git_message = "대기 중"
         self.lab_message = "대기 중"
+        self.git_status = "off"   # off/idle/ok/attention
+        self.lab_status = "off"   # off/idle/ok/error
         # 자동 업데이트: 새 버전 감지 시 {"version","url","notes"} 저장
         self.update_info: dict | None = None
+
+
+def compute_icon_status(state: "TrayState") -> str:
+    """인증/git/lab/업데이트 상태를 종합해 아이콘 색상 키를 결정한다.
+    빨강(fail) > 노랑(checking) > 초록(ok) > 회색(idle=모든 기능 꺼짐) 우선순위."""
+    # 1) 어느 기능이든 문제 → 빨강
+    if state.status == "fail" or state.git_status == "attention" or state.lab_status == "error":
+        return "fail"
+    # 2) 인증 확인 중 또는 새 버전 있음 → 노랑
+    if state.status == "checking" or state.update_info:
+        return "checking"
+    # 3) 활성 기능 중 하나라도 정상/동작 중 → 초록 (인증 안 써도 git·lab 정상이면 초록)
+    if state.status in ("ok", "idle") or state.git_status in ("ok", "idle") or state.lab_status in ("ok", "idle"):
+        return "ok"
+    # 4) 모든 기능 꺼짐 → 회색
+    return "idle"
 
 
 def make_icon_image(status: str) -> Image.Image:
@@ -170,7 +189,7 @@ def make_icon_image(status: str) -> Image.Image:
 
 
 def update_icon(icon: pystray.Icon, state: TrayState):
-    icon.icon = make_icon_image(state.status)
+    icon.icon = make_icon_image(compute_icon_status(state))
     icon.title = f"{APP_NAME} v{APP_VERSION} · {state.last_message}"
     # pystray 메뉴의 동적 텍스트는 update_menu() 호출 시에만 재평가된다
     try:
@@ -235,7 +254,7 @@ async def monitor_loop(authenticator: NetworkAuthenticator, config: dict, icon: 
     운영시간 외에는 체크 자체를 하지 않고 대기만 한다."""
     auth_cfg = config.get("network_auth", {})
     if not auth_cfg.get("enabled", True):
-        state.status = "idle"
+        state.status = "off"
         state.last_message = "인증 사용 안 함"
         update_icon(icon, state)
         logger.info("네트워크 인증 비활성화됨 (enabled=false) — 인증 루프 미실행")
@@ -360,6 +379,9 @@ def main():
     loop_holder: dict = {}
     git_cfg = config.get("git_sync", {}) or {}
     lab_cfg = config.get("lab_dev", {}) or {}
+    # 아이콘 종합 계산용 초기 상태: 꺼진 기능은 off, 켜진 기능은 결과 나오기 전 idle
+    state.git_status = "idle" if git_cfg.get("enabled", False) else "off"
+    state.lab_status = "idle" if lab_cfg.get("enabled", False) else "off"
     git_lock = threading.Lock()  # 스케줄러/메뉴 동시 실행 방지 (index.lock 충돌 방지)
 
     # lab dev 모니터는 미리 생성 — 시작 시 첫 동기화가 변경을 반영하면 즉시 재기동할 수 있어야 함
@@ -455,9 +477,9 @@ def main():
             pass
 
     def refresh():
-        """상태 변경 후 트레이 메뉴의 동적 텍스트를 즉시 다시 그린다."""
+        """상태 변경 후 아이콘 색(종합)과 메뉴 텍스트를 즉시 다시 그린다."""
         try:
-            icon.update_menu()
+            update_icon(icon, state)
         except Exception:
             pass
 
@@ -475,6 +497,7 @@ def main():
             )
             state.git_last = datetime.now()
             state.git_message = result.message
+            state.git_status = "attention" if result.needs_attention else ("ok" if result.ok else "idle")
             refresh()
             logging.getLogger("git_sync").info(f"결과: {result}")
             if result.needs_attention:
@@ -485,12 +508,14 @@ def main():
             if result.ok and result.changed and lab_monitor is not None:
                 restart = lab_monitor.ensure_running(force=True)
                 state.lab_message = _lab_status_label(restart)
+                state.lab_status = "error" if restart.action == "error" else "ok"
                 refresh()
                 notify("변경 반영 — lab 재기동", restart.message)
         except Exception as e:
             # git 미설치·타임아웃 등 예기치 못한 오류로 스케줄러 스레드가 죽지 않도록 흡수
             logging.getLogger("git_sync").error(f"동기화 중 예외: {e}")
             state.git_message = f"오류: {e}"
+            state.git_status = "idle"
             refresh()
         finally:
             git_lock.release()
@@ -505,6 +530,7 @@ def main():
         def _do():
             result = lab_monitor.ensure_running(force=True)
             state.lab_message = _lab_status_label(result)
+            state.lab_status = "error" if result.action == "error" else "ok"
             refresh()
             notify("lab 서버", result.message)
 
@@ -538,6 +564,7 @@ def main():
         while True:
             result = lab_monitor.ensure_running()
             state.lab_message = _lab_status_label(result)
+            state.lab_status = "error" if result.action == "error" else "ok"
             refresh()
             if result.action == "restarted":
                 notify("lab 서버 재실행", result.message)

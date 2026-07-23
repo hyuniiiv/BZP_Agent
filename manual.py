@@ -40,13 +40,14 @@ _MANUAL_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
  <li><b>저장 후 적용</b> — 트레이가 자동 재시작되며 인증이 시작됩니다</li>
 </ol>
 
-<h2>3. 아이콘 색상</h2>
+<h2>3. 아이콘 색상 (전체 상태 요약)</h2>
+<p>아이콘은 켜져 있는 모든 기능(인증·GitLab·lab)을 종합한 상태를 나타냅니다. 세부 내용은 아이콘 우클릭 메뉴에서 볼 수 있습니다.</p>
 <table>
  <tr><th>색상</th><th>의미</th></tr>
- <tr><td><span class="dot" style="background:#2ecc71"></span>초록</td><td>인증됨</td></tr>
- <tr><td><span class="dot" style="background:#e74c3c"></span>빨강</td><td>인증 실패 — 환경설정의 계정 정보 확인</td></tr>
- <tr><td><span class="dot" style="background:#f1c40f"></span>노랑</td><td>확인 중</td></tr>
- <tr><td><span class="dot" style="background:#95a5a6"></span>회색</td><td>사용 안 함(기능 꺼짐)</td></tr>
+ <tr><td><span class="dot" style="background:#2ecc71"></span>초록</td><td>정상 — 문제 없음 (인증됨, 또는 인증을 안 써도 다른 기능이 정상 동작 중)</td></tr>
+ <tr><td><span class="dot" style="background:#e74c3c"></span>빨강</td><td>주의 필요 — 인증 실패 / GitLab 수동 확인 필요 / lab 서버 오류</td></tr>
+ <tr><td><span class="dot" style="background:#f1c40f"></span>노랑</td><td>확인 중 또는 새 버전 있음</td></tr>
+ <tr><td><span class="dot" style="background:#95a5a6"></span>회색</td><td>모든 기능이 꺼져 있음 (대기)</td></tr>
 </table>
 
 <h2>4. 자동 업데이트</h2>
@@ -60,6 +61,7 @@ _MANUAL_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
 
 <h2>6. 문제 해결</h2>
 <ul>
+ <li><b>종료 후 다시 실행하려면</b>: 시작 메뉴에서 <b>"BZP Agent"</b>를 검색해 클릭 (또는 Windows 재로그인 시 자동 실행)</li>
  <li>트레이 우클릭 → <b>로그 폴더 열기</b>에서 실행 로그 확인</li>
  <li>인증이 안 되면: 환경설정에서 ID/PW를 다시 저장</li>
  <li>재설치가 필요하면 배포받은 <code>install.bat</code>을 다시 실행 (계정·설정 유지됨)</li>
