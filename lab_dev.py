@@ -118,6 +118,20 @@ def _start_dev(repo: str, command: str, log_path: Path, show_console: bool = Fal
         script = log_path.parent / "lab_console.ps1"
         script.write_text(
             "$ErrorActionPreference='Continue'\n"
+            # 콘솔/출력 인코딩을 UTF-8로 — node의 UTF-8 한글이 CP949로 깨지는 것 방지
+            "chcp 65001 > $null\n"
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+            "$OutputEncoding = [System.Text.Encoding]::UTF8\n"
+            # 콘솔 VT(가상터미널) 처리 활성화 → Vite 등의 ANSI 색상이 '?[39m' 날것 대신 실제 색으로 렌더됨
+            "try {\n"
+            "  $vt = Add-Type -Name VT -Namespace Con -PassThru -MemberDefinition @'\n"
+            "[DllImport(\"kernel32.dll\")] public static extern IntPtr GetStdHandle(int n);\n"
+            "[DllImport(\"kernel32.dll\")] public static extern bool GetConsoleMode(IntPtr h, out uint m);\n"
+            "[DllImport(\"kernel32.dll\")] public static extern bool SetConsoleMode(IntPtr h, uint m);\n"
+            "'@\n"
+            "  $h = $vt::GetStdHandle(-11); $m = 0\n"
+            "  [void]$vt::GetConsoleMode($h, [ref]$m); [void]$vt::SetConsoleMode($h, $m -bor 4)\n"
+            "} catch {}\n"
             f"Set-Location -LiteralPath '{repo}'\n"
             f"Write-Host '[dev 시작: {command}]' -ForegroundColor Cyan\n"
             f"{command} 2>&1 | Tee-Object -FilePath '{log_path}' -Append\n"
