@@ -98,6 +98,8 @@ def main():
     f_lab.grid(row=2, column=0, sticky="ew", padx=12, pady=4)
     lab_on = tk.BooleanVar(value=data["lab_enabled"])
     ttk.Checkbutton(f_lab, text="사용 (3003 꺼지면 자동 재실행)", variable=lab_on).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
+    lab_console = tk.BooleanVar(value=data["lab_show_console"])
+    ttk.Checkbutton(f_lab, text="콘솔 창 보기 (dev 서버 실시간 로그 표시 · 다음 재실행부터 적용)", variable=lab_console).grid(row=4, column=0, columnspan=2, sticky="w", **pad)
     lab_repo = tk.StringVar(value=data["lab_repo"])
     _add_browse(f_lab, 1, "저장소 경로", lab_repo)
     ttk.Label(f_lab, text="서버 URL").grid(row=2, column=0, sticky="e", **pad)
@@ -127,6 +129,7 @@ def main():
             "lab_repo": lab_repo.get().strip(),
             "lab_url": lab_url.get().strip(),
             "lab_interval": store.label_interval(lab_iv.get(), 60),
+            "lab_show_console": lab_console.get(),
         }
         try:
             store.save_settings(values)

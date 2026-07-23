@@ -95,27 +95,44 @@ def _kill_ports(ports: list[int]) -> list[str]:
     return killed
 
 
-def _start_dev(repo: str, command: str, log_path: Path) -> None:
-    """repo에서 dev 명령을 '보이는' 새 콘솔 창으로 실행 — 개발자가 실시간 로그를 볼 수 있도록.
-    (log_path 인자는 호출부 호환을 위해 유지하나, 출력은 콘솔 창에 직접 표시된다.)"""
-    subprocess.Popen(
-        command,
-        cwd=repo,
-        shell=True,  # pnpm.cmd 해석 위해 필요
-        creationflags=_CREATE_NEW_CONSOLE | _CREATE_NEW_PROCESS_GROUP,
-        close_fds=True,
-    )
+def _start_dev(repo: str, command: str, log_path: Path, show_console: bool = False) -> None:
+    """repo에서 dev 명령을 백그라운드로 실행.
+    show_console=True: '보이는' 새 콘솔 창으로 실행(실시간 로그, 개발자용).
+    show_console=False: 창 없이 실행하고 출력을 log_path 파일로 기록(팀원용 조용)."""
+    if show_console:
+        subprocess.Popen(
+            command,
+            cwd=repo,
+            shell=True,  # pnpm.cmd 해석 위해 필요
+            creationflags=_CREATE_NEW_CONSOLE | _CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
+    else:
+        log_path.parent.mkdir(exist_ok=True)
+        log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 — 백그라운드 프로세스가 계속 사용
+        subprocess.Popen(
+            command,
+            cwd=repo,
+            shell=True,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
 
 
 class LabDevMonitor:
     """lab dev 서버 감시 상태를 들고 재실행 유예를 관리."""
 
-    def __init__(self, repo: str, url: str, ports: list[int], command: str, log_path: Path):
+    def __init__(self, repo: str, url: str, ports: list[int], command: str, log_path: Path,
+                 show_console: bool = False):
         self.repo = str(repo)
         self.url = url
         self.ports = ports
         self.command = command
         self.log_path = log_path
+        self.show_console = show_console
         self._last_start_monotonic: float | None = None
         self._lock = threading.Lock()  # 감시 스레드 / 동기화 연동 / 메뉴 동시 호출 방지
 
@@ -141,7 +158,7 @@ class LabDevMonitor:
 
             killed = _kill_ports(self.ports)
             try:
-                _start_dev(self.repo, self.command, self.log_path)
+                _start_dev(self.repo, self.command, self.log_path, self.show_console)
             except Exception as exc:
                 return LabDevResult("error", f"재실행 실패: {exc}")
             self._last_start_monotonic = time.monotonic()

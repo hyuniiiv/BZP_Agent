@@ -132,6 +132,7 @@ def load_settings() -> dict:
         "lab_repo": ld.get("repo", ""),
         "lab_url": ld.get("url", ""),
         "lab_interval": int(ld.get("check_interval", 60)),
+        "lab_show_console": bool(ld.get("show_console", False)),
     }
 
 
@@ -162,6 +163,7 @@ def save_settings(values: dict) -> None:
     ld["repo"] = values["lab_repo"]
     ld["url"] = values["lab_url"]
     ld["check_interval"] = int(values["lab_interval"])
+    ld["show_console"] = bool(values["lab_show_console"])
 
     _dump_yaml(cfg)
 
