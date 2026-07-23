@@ -120,6 +120,33 @@ def save_credentials(user_id: str, password: str):
     logger.info("계정 설정 저장 완료 (NETWORK_ID/NETWORK_PW)")
 
 
+def _ensure_shortcuts():
+    """시작 폴더 + 시작 메뉴 바로가기를 현재 exe로 (재)생성한다.
+    앱이 직접 하므로 설치 스크립트 없이 '자동 업데이트'만으로 전파된다.
+    콘솔 없이 PowerShell로 .lnk 생성(추가 의존성 없음). 개발 모드에선 스킵."""
+    if not getattr(sys, "frozen", False):
+        return
+    import subprocess
+    exe = str(Path(sys.executable))
+    workdir = str(BASE_DIR)
+    ps = (
+        "$w=New-Object -ComObject WScript.Shell;"
+        "foreach($p in @("
+        "(Join-Path ([Environment]::GetFolderPath('Startup')) 'BZP_Agent.lnk'),"
+        "(Join-Path ([Environment]::GetFolderPath('Programs')) 'BZP Agent.lnk'))){"
+        f"$s=$w.CreateShortcut($p);$s.TargetPath='{exe}';$s.WorkingDirectory='{workdir}';"
+        "$s.Description='BZP Agent 트레이 앱';$s.Save()}"
+    )
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            creationflags=0x08000000, close_fds=True,  # CREATE_NO_WINDOW
+        )
+        logger.info("바로가기(시작폴더/시작메뉴) 보장 완료")
+    except Exception as e:
+        logger.debug(f"바로가기 보장 실패(무시): {e}")
+
+
 class TrayState:
     def __init__(self):
         self.status = "checking"
@@ -565,6 +592,7 @@ def main():
         except Exception as e:
             logger.error(f"백그라운드 루프 종료: {e}")
 
+    _ensure_shortcuts()  # 시작폴더/시작메뉴 바로가기 보장 (자동 업데이트로 전파)
     threading.Thread(target=run_background_loop, daemon=True).start()
     threading.Thread(target=git_sync_scheduler, daemon=True).start()
     threading.Thread(target=lab_dev_watch, daemon=True).start()
