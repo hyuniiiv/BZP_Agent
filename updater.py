@@ -135,15 +135,26 @@ def _download_asset(asset_url: str, dest: Path, token: str, timeout: int = 120) 
 
 
 # 앱 종료 대기 → 파일 교체 → 재시작. $Pid는 PowerShell 예약변수라 $ProcId 사용.
+# 종료 직후 파일 핸들 해제/백신 스캔 지연으로 복사가 일시적으로 잠길 수 있어 재시도 루프로 처리하고,
+# 결과를 로그 파일에 남긴다(조용한 실패 방지).
 _APPLY_PS = r"""param([int]$ProcId, [string]$Src, [string]$Dst, [string]$Exe)
-$ErrorActionPreference = "SilentlyContinue"
-# 1) 기존 앱 프로세스 종료 대기 (최대 60초)
-try { Wait-Process -Id $ProcId -Timeout 60 } catch {}
-Start-Sleep -Seconds 1
-# 2) 새 코드 덮어쓰기 (config.yaml/.env/ms-playwright 는 $Src에 없어 보존됨)
-Copy-Item -Path (Join-Path $Src '*') -Destination $Dst -Recurse -Force
-# 3) 재실행
+$log = Join-Path $Dst "logs\update_apply.log"
+function Log($m) { try { Add-Content -Path $log -Value ((Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' ' + $m) -Encoding UTF8 } catch {} }
+Log "업데이터 시작 ProcId=$ProcId Src=$Src"
+try { Wait-Process -Id $ProcId -Timeout 60 -ErrorAction SilentlyContinue } catch {}
+$ok = $false
+for ($i = 1; $i -le 10; $i++) {
+    Start-Sleep -Seconds 2
+    try {
+        Copy-Item -Path (Join-Path $Src '*') -Destination $Dst -Recurse -Force -ErrorAction Stop
+        $ok = $true; Log "복사 성공 (시도 $i)"; break
+    } catch {
+        Log "복사 실패 (시도 $i): $($_.Exception.Message)"
+    }
+}
+if (-not $ok) { Log "복사 최종 실패 — 기존 버전으로 재실행" }
 Start-Process -FilePath $Exe -WorkingDirectory $Dst
+Log "재실행 요청 완료 (교체성공=$ok)"
 """
 
 
