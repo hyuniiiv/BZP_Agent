@@ -111,10 +111,22 @@ def _start_dev(repo: str, command: str, log_path: Path, show_console: bool = Fal
     show_console=True: '보이는' 새 콘솔 창으로 실행(실시간 로그, 개발자용).
     show_console=False: 창 없이 실행하고 출력을 log_path 파일로 기록(팀원용 조용)."""
     if show_console:
-        # cmd /k = 명령이 끝나도(예: pnpm이 서버를 띄우고 반환해도) 콘솔 창을 닫지 않고 유지.
-        # CREATE_NEW_CONSOLE 로 창 없는(windowed) 앱에서도 새 콘솔 창을 강제로 띄운다.
+        # 보이는 콘솔 + 파일 로그 동시(Tee). 서버가 죽으면 종료 코드/시각을 파일에 남겨
+        # "왜 꺼졌는지"(정상종료 exit=0 / 크래시 exit!=0 / 외부 kill=마커 없음)를 진단할 수 있게 한다.
+        # PowerShell -NoExit 로 창을 유지(로그·에러 확인). 따옴표 지옥을 피하려고 스크립트 파일로 실행.
+        log_path.parent.mkdir(exist_ok=True)
+        script = log_path.parent / "lab_console.ps1"
+        script.write_text(
+            "$ErrorActionPreference='Continue'\n"
+            f"Set-Location -LiteralPath '{repo}'\n"
+            f"Write-Host '[dev 시작: {command}]' -ForegroundColor Cyan\n"
+            f"{command} 2>&1 | Tee-Object -FilePath '{log_path}' -Append\n"
+            f"Add-Content -Path '{log_path}' -Value \"[dev 종료됨: exit=$LASTEXITCODE 시각=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')]\"\n"
+            "Write-Host ''; Write-Host '[dev 서버가 종료되었습니다. 위 로그에서 원인을 확인하세요. 곧 자동 재실행됩니다.]' -ForegroundColor Yellow\n",
+            encoding="utf-8-sig",
+        )
         return subprocess.Popen(
-            f'cmd /k {command}',
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", str(script)],
             cwd=repo,
             creationflags=_CREATE_NEW_CONSOLE | _CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
