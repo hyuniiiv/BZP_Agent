@@ -13,6 +13,7 @@ subprocess로 시스템 git 호출 — 새 파이썬 의존성 없음.
 """
 import logging
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +22,21 @@ logger = logging.getLogger("git_sync")
 # git 명령 타임아웃(초). fetch는 네트워크 대기가 있어 길게.
 DEFAULT_TIMEOUT = 120
 FETCH_TIMEOUT = 180
+
+# 윈도우드 exe에서 git 호출 시 콘솔 창이 깜빡이지 않도록
+_CREATE_NO_WINDOW = 0x08000000
+# .git 잠금(index.lock 등) 충돌 시 재시도 정책 — 다른 git 프로세스가 끝나길 잠깐 대기
+_LOCK_HINTS = ("index.lock", "unable to create", "another git process", "cannot lock ref")
+_LOCK_RETRIES = 3
+_LOCK_WAIT = 3  # 초
+
+
+def _is_lock_error(cp: subprocess.CompletedProcess) -> bool:
+    """git 실패가 .git 잠금 충돌 때문인지 판정 (stderr 힌트 기반)."""
+    if cp.returncode == 0:
+        return False
+    text = (cp.stderr or "").lower()
+    return any(h in text for h in _LOCK_HINTS)
 
 
 class SyncResult:
@@ -37,15 +53,25 @@ class SyncResult:
 
 
 def _git(repo: str, *args: str, timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess:
-    """repo 경로를 항상 -C로 강제 지정해 git 실행 (프로세스 cwd에 의존하지 않음)."""
-    return subprocess.run(
-        ["git", "-C", repo, *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
+    """repo 경로를 항상 -C로 강제 지정해 git 실행 (프로세스 cwd에 의존하지 않음).
+    콘솔 창을 띄우지 않으며, 다른 git 프로세스와의 .git 잠금 충돌 시 잠깐 대기 후 재시도한다."""
+    cp = None
+    for attempt in range(_LOCK_RETRIES + 1):
+        cp = subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        if not _is_lock_error(cp):
+            return cp
+        if attempt < _LOCK_RETRIES:
+            logger.info(f"git 잠금 충돌 감지 — {_LOCK_WAIT}s 후 재시도 {attempt + 1}/{_LOCK_RETRIES}")
+            time.sleep(_LOCK_WAIT)
+    return cp  # 재시도 소진 — 마지막(잠금) 결과 반환, 호출부가 처리
 
 
 def _has_tracked_changes(status_stdout: str) -> bool:
@@ -114,7 +140,23 @@ def sync(repo_path, remote_ref: str = "origin/main") -> SyncResult:
     merge = _git(repo, "merge", "--ff-only", remote_ref)
     if merge.returncode != 0:
         _restore_stash(repo, stashed)
-        return SyncResult(False, f"FF 병합 실패: {merge.stderr.strip()}", needs_attention=True)
+        err = merge.stderr.strip()
+        if _is_lock_error(merge):
+            # 재시도(_git)까지 소진하고도 잠긴 상태 — 다른 git 작업 중이거나 스테일 락
+            return SyncResult(
+                False,
+                "저장소가 잠겨 병합 보류(.git/index.lock). 다른 git 작업 중이거나 스테일 락일 수 있습니다. "
+                "지속되면 .git/index.lock 을 확인하세요.",
+                needs_attention=True,
+            )
+        if "would be overwritten" in err.lower():
+            # 로컬 변경 또는 skip-worktree 파일이 병합을 막음 — 자동 해결하지 않고 알림
+            return SyncResult(
+                False,
+                f"로컬 변경(또는 skip-worktree 파일)이 병합을 막습니다 — 수동 확인 필요:\n{err}",
+                needs_attention=True,
+            )
+        return SyncResult(False, f"FF 병합 실패: {err}", needs_attention=True)
 
     # 6. 작업 복원 (stash 한 경우에만)
     if stashed:

@@ -6,6 +6,8 @@ network_auth:
   url: http://172.28.200.250/cwp2/faces/common/userAuth.xhtml
   id_field: ''
   pw_field: ''
+  run_hour_start: 0
+  run_hour_end: 24
   check_interval: 180
   peak_interval: 60
   peak_windows:

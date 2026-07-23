@@ -212,8 +212,8 @@ async def monitor_loop(authenticator: NetworkAuthenticator, config: dict, icon: 
         update_icon(icon, state)
         logger.info("네트워크 인증 비활성화됨 (enabled=false) — 인증 루프 미실행")
         return
-    run_hour_start = auth_cfg.get("run_hour_start", 8)
-    run_hour_end = auth_cfg.get("run_hour_end", 9)
+    run_hour_start = auth_cfg.get("run_hour_start", 0)
+    run_hour_end = auth_cfg.get("run_hour_end", 24)
     base_interval = interval
     peak_interval = int(auth_cfg.get("peak_interval", interval))
     peak_windows = _parse_peak_windows(auth_cfg.get("peak_windows", []))
@@ -230,9 +230,9 @@ async def monitor_loop(authenticator: NetworkAuthenticator, config: dict, icon: 
                 return peak_interval
         return base_interval
 
-    # 시작 즉시 1회 완전 체크 (운영 시간 내일 때만)
-    if _in_operating_hours():
-        await do_check(authenticator, icon, state)
+    # 시작 즉시 1회 완전 체크 (운영시간과 무관하게 항상 수행 —
+    # 시작 직후 회색 대기 대신 실제 인증 상태(초록/빨강)를 바로 표시)
+    await do_check(authenticator, icon, state)
 
     while True:
         if not _in_operating_hours():
@@ -450,6 +450,11 @@ def main():
                 state.lab_message = _lab_status_label(restart)
                 refresh()
                 notify("변경 반영 — lab 재기동", restart.message)
+        except Exception as e:
+            # git 미설치·타임아웃 등 예기치 못한 오류로 스케줄러 스레드가 죽지 않도록 흡수
+            logging.getLogger("git_sync").error(f"동기화 중 예외: {e}")
+            state.git_message = f"오류: {e}"
+            refresh()
         finally:
             git_lock.release()
 

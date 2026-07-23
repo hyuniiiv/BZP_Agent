@@ -24,11 +24,10 @@ STARTUP_GRACE = 90
 # 헬스체크 HTTP 타임아웃(초)
 HEALTH_TIMEOUT = 3
 
-# Windows: 콘솔 창 없이 별도 프로세스 그룹으로 분리 실행
-_CREATE_NO_WINDOW = 0x08000000
-_DETACHED_PROCESS = 0x00000008
+# Windows 프로세스 생성 플래그
+_CREATE_NO_WINDOW = 0x08000000        # 보조 명령(netstat/taskkill)은 창 없이
+_CREATE_NEW_CONSOLE = 0x00000010      # dev 서버는 '보이는' 새 콘솔 창으로 (실시간 로그)
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
-_DETACHED_FLAGS = _CREATE_NO_WINDOW | _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP
 
 
 class LabDevResult:
@@ -61,6 +60,7 @@ def _pids_on_port(port: int) -> set[str]:
         out = subprocess.run(
             ["netstat", "-ano", "-p", "tcp"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            creationflags=_CREATE_NO_WINDOW,
         )
     except Exception as exc:
         logger.debug(f"netstat 실패: {exc}")
@@ -86,6 +86,7 @@ def _kill_ports(ports: list[int]) -> list[str]:
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", pid],
                     capture_output=True, text=True, timeout=15,
+                    creationflags=_CREATE_NO_WINDOW,
                 )
                 killed.append(pid)
                 logger.info(f"포트 {port} 점유 프로세스 종료 (PID {pid})")
@@ -95,17 +96,13 @@ def _kill_ports(ports: list[int]) -> list[str]:
 
 
 def _start_dev(repo: str, command: str, log_path: Path) -> None:
-    """repo에서 dev 명령을 콘솔 없이 백그라운드로 실행. 출력은 log_path로 리다이렉트."""
-    log_path.parent.mkdir(exist_ok=True)
-    log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 — detached 프로세스가 계속 사용
+    """repo에서 dev 명령을 '보이는' 새 콘솔 창으로 실행 — 개발자가 실시간 로그를 볼 수 있도록.
+    (log_path 인자는 호출부 호환을 위해 유지하나, 출력은 콘솔 창에 직접 표시된다.)"""
     subprocess.Popen(
         command,
         cwd=repo,
         shell=True,  # pnpm.cmd 해석 위해 필요
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL,
-        creationflags=_DETACHED_FLAGS,
+        creationflags=_CREATE_NEW_CONSOLE | _CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
     )
 

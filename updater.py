@@ -28,8 +28,11 @@ logger = logging.getLogger("updater")
 API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _UA = f"BZP_Agent/{APP_VERSION}"
 
-# DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — 업데이터가 부모(이 앱)와 함께 죽지 않도록
-_DETACHED = 0x00000008 | 0x00000200
+# 업데이터 PowerShell 스폰 플래그.
+# 주의: DETACHED_PROCESS(0x8, 콘솔 없음)로 띄우면 powershell이 콘솔 호스트를 못 잡아 조용히 죽는다.
+# CREATE_NO_WINDOW(0x08000000)는 '숨겨진 콘솔'을 할당하므로 창 없이도 정상 기동하며,
+# CREATE_NEW_PROCESS_GROUP(0x200)으로 부모와 분리해 부모 종료 후에도 살아남는다.
+_UPDATER_FLAGS = 0x08000000 | 0x00000200
 
 
 def _load_token() -> str:
@@ -190,7 +193,7 @@ def download_and_apply(asset_url: str, install_dir, exe_name: str = "BZP_Agent.e
         subprocess.Popen(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_path),
              "-ProcId", str(pid), "-Src", str(payload), "-Dst", str(install_dir), "-Exe", str(exe_path)],
-            creationflags=_DETACHED, close_fds=True,
+            creationflags=_UPDATER_FLAGS, close_fds=True,
         )
         logger.info(f"업데이터 실행됨 → {exe_path} (pid {pid} 종료 대기 후 교체)")
         return True
