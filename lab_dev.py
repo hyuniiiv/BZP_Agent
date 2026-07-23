@@ -95,33 +95,42 @@ def _kill_ports(ports: list[int]) -> list[str]:
     return killed
 
 
-def _start_dev(repo: str, command: str, log_path: Path, show_console: bool = False) -> None:
-    """repo에서 dev 명령을 백그라운드로 실행.
+def _kill_tree(pid) -> None:
+    """지정 PID와 그 자식들을 강제 종료 (콘솔 창을 포함해 정리)."""
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True, timeout=15, creationflags=_CREATE_NO_WINDOW,
+        )
+    except Exception as exc:
+        logger.debug(f"프로세스 트리 종료 실패(pid {pid}): {exc}")
+
+
+def _start_dev(repo: str, command: str, log_path: Path, show_console: bool = False) -> subprocess.Popen:
+    """repo에서 dev 명령을 실행하고 Popen 핸들을 반환한다.
     show_console=True: '보이는' 새 콘솔 창으로 실행(실시간 로그, 개발자용).
     show_console=False: 창 없이 실행하고 출력을 log_path 파일로 기록(팀원용 조용)."""
     if show_console:
         # cmd /k = 명령이 끝나도(예: pnpm이 서버를 띄우고 반환해도) 콘솔 창을 닫지 않고 유지.
-        # shell=True(cmd /c) 는 pnpm 반환 시 창이 닫혀 로그를 못 보므로 사용하지 않는다.
         # CREATE_NEW_CONSOLE 로 창 없는(windowed) 앱에서도 새 콘솔 창을 강제로 띄운다.
-        subprocess.Popen(
+        return subprocess.Popen(
             f'cmd /k {command}',
             cwd=repo,
             creationflags=_CREATE_NEW_CONSOLE | _CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
         )
-    else:
-        log_path.parent.mkdir(exist_ok=True)
-        log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 — 백그라운드 프로세스가 계속 사용
-        subprocess.Popen(
-            command,
-            cwd=repo,
-            shell=True,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP,
-            close_fds=True,
-        )
+    log_path.parent.mkdir(exist_ok=True)
+    log_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 — 백그라운드 프로세스가 계속 사용
+    return subprocess.Popen(
+        command,
+        cwd=repo,
+        shell=True,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
 
 
 class LabDevMonitor:
@@ -135,6 +144,7 @@ class LabDevMonitor:
         self.command = command
         self.log_path = log_path
         self.show_console = show_console
+        self._launched_pid: int | None = None  # 직전에 띄운 프로세스(콘솔 포함) — 재실행 시 먼저 정리
         self._last_start_monotonic: float | None = None
         self._lock = threading.Lock()  # 감시 스레드 / 동기화 연동 / 메뉴 동시 호출 방지
 
@@ -158,11 +168,16 @@ class LabDevMonitor:
             if not force and self._within_grace():
                 return LabDevResult("grace", "재실행 후 부팅 대기 중")
 
+            # 직전에 띄운 프로세스(콘솔 창 포함)를 먼저 정리 — 콘솔 창 누적 방지
+            if self._launched_pid:
+                _kill_tree(self._launched_pid)
+                self._launched_pid = None
             killed = _kill_ports(self.ports)
             try:
-                _start_dev(self.repo, self.command, self.log_path, self.show_console)
+                proc = _start_dev(self.repo, self.command, self.log_path, self.show_console)
             except Exception as exc:
                 return LabDevResult("error", f"재실행 실패: {exc}")
+            self._launched_pid = proc.pid
             self._last_start_monotonic = time.monotonic()
             detail = f" (종료 PID: {', '.join(killed)})" if killed else ""
             logger.info(f"lab dev 재실행: {self.command}{detail}")
