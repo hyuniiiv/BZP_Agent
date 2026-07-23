@@ -48,6 +48,7 @@ from version import APP_VERSION
 import git_sync
 import lab_dev
 import updater
+import manual
 
 # 업데이트 확인 주기(초): 시작 시 1회 + 이후 하루 1회
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60
@@ -281,6 +282,7 @@ def build_menu(
     on_lab_check_now,
     on_update_now,
     on_check_update,
+    on_open_manual,
 ) -> pystray.Menu:
     def status_text(_item):
         return f"인증: {state.last_message}"
@@ -314,6 +316,7 @@ def build_menu(
         pystray.MenuItem("지금 GitLab 동기화", on_git_sync_now),
         pystray.MenuItem("지금 lab 서버 확인", on_lab_check_now),
         pystray.MenuItem("환경설정...", on_set_credentials),
+        pystray.MenuItem("사용 설명서", on_open_manual),
         pystray.MenuItem("로그 폴더 열기", on_open_logs),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(version_text, None, enabled=False),
@@ -399,6 +402,12 @@ def main():
 
     def on_open_logs(_icon, _item):
         os.startfile(str(LOG_FILE.parent))
+
+    def on_open_manual(_icon, _item):
+        try:
+            manual.write_and_open(BASE_DIR)
+        except Exception as e:
+            logger.error(f"사용 설명서 열기 실패: {e}")
 
     def on_quit(icon_, _item):
         logger.info("종료 요청 수신")
@@ -543,7 +552,7 @@ def main():
 
     icon.menu = build_menu(
         state, on_check_now, on_open_settings, on_open_logs, on_quit,
-        on_git_sync_now, on_lab_check_now, on_update_now, on_check_update,
+        on_git_sync_now, on_lab_check_now, on_update_now, on_check_update, on_open_manual,
     )
 
     def run_background_loop():

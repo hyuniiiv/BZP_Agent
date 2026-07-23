@@ -14,3 +14,7 @@ __pycache__/
 
 # 배포용 템플릿(개인정보 없음)은 추적 허용
 !config.dist.yaml
+
+# 압축 해제/추출 산출물
+BZP_Agent_Setup/
+BZP_Agent/
