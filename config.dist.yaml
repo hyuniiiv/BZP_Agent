@@ -1,0 +1,27 @@
+# 이 파일은 트레이 앱 '환경설정' 화면에서 관리됩니다. 직접 편집도 가능합니다.
+# 배포 기본값: 모든 기능이 꺼져 있습니다. 트레이 아이콘 우클릭 → '환경설정...' 에서
+# 필요한 기능을 켜고 계정/저장소 정보를 입력하세요.
+network_auth:
+  enabled: false
+  url: http://172.28.200.250/cwp2/faces/common/userAuth.xhtml
+  id_field: ''
+  pw_field: ''
+  check_interval: 180
+  peak_interval: 60
+  peak_windows:
+  - 04:55-05:15
+git_sync:
+  enabled: false
+  repo: ''
+  remote_ref: origin/main
+  sync_times:
+  - 08:00
+lab_dev:
+  enabled: false
+  repo: ''
+  url: http://localhost:3003
+  command: pnpm lab dev
+  ports:
+  - 3003
+  - 4401
+  check_interval: 60

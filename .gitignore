@@ -1,0 +1,16 @@
+# 자격증명·개인정보 — 절대 커밋 금지
+update_token.txt
+.env
+config.yaml
+
+# 런타임/빌드 산출물
+data/
+logs/
+build/
+dist/
+*.zip
+__pycache__/
+*.pyc
+
+# 배포용 템플릿(개인정보 없음)은 추적 허용
+!config.dist.yaml
