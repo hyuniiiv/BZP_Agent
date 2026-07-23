@@ -100,10 +100,12 @@ def _start_dev(repo: str, command: str, log_path: Path, show_console: bool = Fal
     show_console=True: '보이는' 새 콘솔 창으로 실행(실시간 로그, 개발자용).
     show_console=False: 창 없이 실행하고 출력을 log_path 파일로 기록(팀원용 조용)."""
     if show_console:
+        # cmd /k = 명령이 끝나도(예: pnpm이 서버를 띄우고 반환해도) 콘솔 창을 닫지 않고 유지.
+        # shell=True(cmd /c) 는 pnpm 반환 시 창이 닫혀 로그를 못 보므로 사용하지 않는다.
+        # CREATE_NEW_CONSOLE 로 창 없는(windowed) 앱에서도 새 콘솔 창을 강제로 띄운다.
         subprocess.Popen(
-            command,
+            f'cmd /k {command}',
             cwd=repo,
-            shell=True,  # pnpm.cmd 해석 위해 필요
             creationflags=_CREATE_NEW_CONSOLE | _CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
         )
