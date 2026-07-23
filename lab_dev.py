@@ -134,7 +134,9 @@ def _start_dev(repo: str, command: str, log_path: Path, show_console: bool = Fal
             "} catch {}\n"
             f"Set-Location -LiteralPath '{repo}'\n"
             f"Write-Host '[dev 시작: {command}]' -ForegroundColor Cyan\n"
-            f"{command} 2>&1 | Tee-Object -FilePath '{log_path}' -Append\n"
+            # 주의: PowerShell 5.1에서 네이티브 명령에 '2>&1'을 쓰면 stderr가 NativeCommandError로
+            # 감싸져 정상 경고까지 빨간 에러 블록으로 보인다. cmd 레벨에서 병합(평문)한 뒤 PS로 받는다.
+            f"cmd /c '{command} 2>&1' | Tee-Object -FilePath '{log_path}' -Append\n"
             f"Add-Content -Path '{log_path}' -Value \"[dev 종료됨: exit=$LASTEXITCODE 시각=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')]\"\n"
             "Write-Host ''; Write-Host '[dev 서버가 종료되었습니다. 위 로그에서 원인을 확인하세요. 곧 자동 재실행됩니다.]' -ForegroundColor Yellow\n",
             encoding="utf-8-sig",
