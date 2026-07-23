@@ -78,7 +78,7 @@ def main():
     f_git = ttk.LabelFrame(root, text="GitLab 동기화")
     f_git.grid(row=1, column=0, sticky="ew", padx=12, pady=4)
     git_on = tk.BooleanVar(value=data["git_enabled"])
-    ttk.Checkbutton(f_git, text="사용 (매일 지정 시각 + 앱 시작 시 동기화)", variable=git_on).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
+    ttk.Checkbutton(f_git, text="사용 (매일 지정 시각에 동기화)", variable=git_on).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
     git_repo = tk.StringVar(value=data["git_repo"])
     _add_browse(f_git, 1, "저장소 경로", git_repo)
     ttk.Label(f_git, text="동기화 시각").grid(row=2, column=0, sticky="ne", **pad)

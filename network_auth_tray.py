@@ -469,7 +469,7 @@ def main():
         threading.Thread(target=_do, daemon=True).start()
 
     def git_sync_scheduler():
-        """앱 시작 시 1회 + 매일 sync_hour 정시에 1회 동기화."""
+        """매일 지정 시각(sync_times)에 1회 동기화. (앱 시작 시 동기화는 하지 않음)"""
         if not git_cfg.get("enabled", False):
             return
         # 동기화 시각 목록 (신규 sync_times, 없으면 구버전 sync_hour/sync_minute 폴백)
@@ -478,12 +478,7 @@ def main():
             sh = int(git_cfg.get("sync_hour", 8))
             sm = int(git_cfg.get("sync_minute", 0))
             sync_times = [f"{sh:02d}:{sm:02d}"]
-        run_git_sync()  # 시작 시 1회
         done: set = set()  # (날짜, "HH:MM") 실행 완료 기록 — 시각별로 하루 1회 보장
-        now0 = datetime.now()
-        cur0 = f"{now0.hour:02d}:{now0.minute:02d}"
-        if cur0 in sync_times:
-            done.add((now0.date(), cur0))  # 시작 sync가 이 시각을 커버 → 중복 방지
         while True:
             time.sleep(30)
             now = datetime.now()
