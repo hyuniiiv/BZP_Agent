@@ -199,8 +199,9 @@ def update_icon(icon: pystray.Icon, state: TrayState):
 
 
 def _lab_status_label(result: lab_dev.LabDevResult) -> str:
-    """lab dev 감시 결과를 트레이 메뉴용 짧은 라벨로 변환."""
-    labels = {"up": "정상", "restarted": "재실행함", "grace": "부팅 대기"}
+    """lab dev 감시 결과를 트레이 메뉴용 짧은 라벨로 변환.
+    grace는 '부팅 대기'/'응답 지연(빌드 중)' 두 의미를 가지므로 고정 라벨 대신 실제 메시지를 보여준다."""
+    labels = {"up": "정상", "restarted": "재실행함"}
     if result.action == "error":
         return f"오류: {result.message}"
     return labels.get(result.action, result.message)

@@ -1,11 +1,13 @@
 """
 lab dev 서버(localhost:3003) 감시·자동 재실행 — 트레이 앱 부가 기능.
 
-주기적으로 http://localhost:3003 헬스체크 → 응답이 없으면:
-  1. 관련 포트(3003 lab, 4401 lab-api) 점유 좀비 프로세스 강제 종료
+주기적으로 http://localhost:3003 헬스체크 → 포트(3003/4401)가 실제로 안 열려 있을 때만
+(=프로세스가 진짜 종료됐을 때만) 재시작한다:
+  1. 관련 포트 점유 좀비 프로세스 강제 종료
   2. repo에서 `pnpm lab dev`를 콘솔 없이 백그라운드로 재실행
 
-정상 응답 중이면 아무것도 하지 않는다(멀쩡한 서버를 죽이지 않음).
+HTTP 응답이 없어도 포트가 여전히 listen 중이면(=빌드로 바쁜 것뿐일 수 있음) 재시작하지 않는다 —
+"바쁜데 죽었다고 오판해 우리가 직접 킬"하는 오탐을 막기 위함(check_health 참고).
 재실행 직후에는 부팅 시간이 필요하므로 STARTUP_GRACE 동안 재시작 판정을 보류한다.
 
 subprocess + urllib(stdlib)만 사용 — 새 파이썬 의존성 없음.
@@ -64,16 +66,21 @@ class LabDevResult:
         return f"LabDevResult(action={self.action!r}, msg={self.message!r})"
 
 
-def is_up(url: str, timeout: int = HEALTH_TIMEOUT) -> bool:
-    """dev 서버가 HTTP 응답하는지 확인. 어떤 상태코드든 응답이 오면 살아있는 것으로 본다."""
+def check_health(url: str, ports: list[int], timeout: int = HEALTH_TIMEOUT) -> str:
+    """dev 서버 상태 판정: 'up'(정상) | 'busy'(포트는 listen 중인데 응답 없음=빌드로 바쁨) | 'down'(포트 자체가 안 열림=진짜 죽음).
+
+    HTTP 타임아웃/연결거부만으로 '죽음'을 판단하지 않는 이유: 이 환경에서는 방화벽이 SYN을
+    조용히 drop해 '연결거부'조차 타임아웃으로 보여 예외 종류로는 구분이 불가능하다(실측 확인됨).
+    대신 netstat 기반으로 포트가 실제 listen 중인지를 권위 있는 신호로 삼는다 — 포트가 열려
+    있으면 프로세스는 살아있는 것이고, 리빌드로 응답만 늦은 것뿐일 수 있다(흔한 오탐 패턴 방지)."""
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return resp.status < 500
+            return "up" if resp.status < 500 else "busy"
     except urllib.error.HTTPError:
-        # 4xx/5xx라도 서버 프로세스는 응답 중 → 살아있음
-        return True
+        return "up"  # 4xx/5xx라도 서버 프로세스는 응답 중 → 살아있음
     except Exception:
-        return False
+        pass
+    return "busy" if any(_pids_on_port(p) for p in ports) else "down"
 
 
 def _pids_on_port(port: int) -> set[str]:
@@ -205,11 +212,11 @@ class LabDevMonitor:
 
     def ensure_running(self, force: bool = False, reason: str | None = None) -> LabDevResult:
         """서버가 죽어 있으면 포트 정리 후 재실행. force=True면 유예 무시하고 즉시 재실행.
-        reason: 로그에 남길 트리거 사유(예: "수동 요청", "GitLab 변경 반영"). 미지정 시 자동 판단."""
+        reason: 로그에 남길 트리거 사유. 미지정 시 자동 판단(수동 요청 / 헬스체크 결과)."""
         if not Path(self.repo).exists():
             return LabDevResult("error", f"repo 경로 없음: {self.repo}")
-        if reason is None:
-            reason = "수동/외부 요청" if force else "응답 없음 감지"
+        if reason is None and force:
+            reason = "수동/외부 요청"
 
         # 동시 재실행 방지.
         # force(동기화 후 재기동·메뉴 요청)는 반드시 실행해야 하므로 락을 대기해서라도 획득한다.
@@ -219,8 +226,19 @@ class LabDevMonitor:
         elif not self._lock.acquire(blocking=False):
             return LabDevResult("grace", "다른 확인 진행 중")
         try:
-            if not force and is_up(self.url):
-                return LabDevResult("up", "정상 구동 중")
+            if not force:
+                health = check_health(self.url, self.ports)
+                logger.info(f"헬스체크: {health} (url={self.url})")
+                if health == "up":
+                    return LabDevResult("up", "정상 구동 중")
+                if health == "busy":
+                    # 포트는 listen 중 = 프로세스는 살아있음 = 빌드로 응답만 늦은 것뿐일 수 있다.
+                    # 여기서 죽었다고 오판해 우리가 직접 킬하는 게 가장 흔한 오탐 패턴이라,
+                    # 절대 자동으로 재시작하지 않고 다음 감시 주기에 다시 확인한다.
+                    logger.info("포트는 열려있으나 응답 없음(빌드 중일 수 있음) — 재시작하지 않고 다음 주기에 재확인")
+                    return LabDevResult("grace", "응답 지연 (빌드 중일 수 있음 — 재시작 안 함)")
+                # health == "down": 포트 자체가 안 열려 있음 = 프로세스가 실제로 종료됨
+                reason = reason or "포트 응답 없음 — 프로세스 실제 종료 확인됨"
 
             # 부팅 유예: 최근 재실행 직후면 아직 부팅 중일 수 있어 재시작하지 않는다
             if not force and self._within_grace():
