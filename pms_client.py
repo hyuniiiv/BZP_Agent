@@ -89,7 +89,9 @@ def fetch_issue_alerts(pms_id: str, pms_pw: str, project_codes: list[str], upcom
         code = it.get("projectCode")
         if code_filter is not None and code not in code_filter:
             continue
-        if it.get("actualEndDt"):  # 실제 완료됨 — 알림 대상 아님
+        # taskStatus "2" = 완료. actualEndDt는 완료 건에서도 비어있는 경우가 있어(실측 확인됨)
+        # 완료 여부 판정에 신뢰할 수 없다 — taskStatus를 권위 있는 신호로 사용한다.
+        if it.get("taskStatus") == "2":
             continue
         due = _parse_ymd(it.get("endDt"))
         if due is None:
