@@ -60,6 +60,7 @@ GIT_SYNC_LOG = BASE_DIR / "logs" / "git_sync.log"
 LAB_DEV_LOG = BASE_DIR / "logs" / "lab_dev.log"            # 감시 이벤트(Python 로깅)
 LAB_DEV_SERVER_LOG = BASE_DIR / "logs" / "lab_dev_server.log"  # pnpm dev 서버 stdout/stderr
 PMS_LOG = BASE_DIR / "logs" / "pms.log"
+PMS_REPORT = BASE_DIR / "pms_issues.html"
 ENV_FILE = BASE_DIR / ".env"
 
 logging.basicConfig(
@@ -335,6 +336,7 @@ def build_menu(
     on_git_sync_now,
     on_lab_check_now,
     on_pms_check_now,
+    on_pms_view_issues,
     on_update_now,
     on_check_update,
     on_open_manual,
@@ -376,6 +378,7 @@ def build_menu(
         pystray.MenuItem("지금 GitLab 동기화", on_git_sync_now),
         pystray.MenuItem("지금 lab 서버 확인", on_lab_check_now),
         pystray.MenuItem("지금 PMS 확인", on_pms_check_now),
+        pystray.MenuItem("PMS 이슈 보기", on_pms_view_issues),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("환경설정...", on_set_credentials),
         pystray.MenuItem("사용 설명서", on_open_manual),
@@ -573,17 +576,19 @@ def main():
             alerts = pms_client.fetch_issue_alerts(pms_id, pms_pw, project_codes, upcoming_days)
             state.pms_last = datetime.now()
             overdue, upcoming = alerts["overdue"], alerts["upcoming"]
+            pms_client.write_report_html(PMS_REPORT, overdue, upcoming)
+            tail = "\n(자세히 보려면 트레이 메뉴 'PMS 이슈 보기')"
             if overdue:
                 state.pms_message = f"지연 {len(overdue)}건 · 임박 {len(upcoming)}건"
                 state.pms_status = "attention"
                 lines = "\n".join(f"- {e['project']} {e['title']} (마감 {e['due']})" for e in overdue[:5])
-                notify("PMS 이슈 지연", lines)
+                notify("PMS 이슈 지연", lines + tail)
             elif upcoming:
                 state.pms_message = f"임박 {len(upcoming)}건"
                 state.pms_status = "ok"
                 if notify_ok:
                     lines = "\n".join(f"- {e['project']} {e['title']} (마감 {e['due']})" for e in upcoming[:5])
-                    notify("PMS 임박 이슈", lines)
+                    notify("PMS 임박 이슈", lines + tail)
             else:
                 state.pms_message = "지연/임박 이슈 없음"
                 state.pms_status = "ok"
@@ -603,6 +608,12 @@ def main():
 
     def on_pms_check_now(_icon, _item):
         threading.Thread(target=lambda: run_pms_check(notify_ok=True), daemon=True).start()
+
+    def on_pms_view_issues(_icon, _item):
+        if PMS_REPORT.exists():
+            os.startfile(str(PMS_REPORT))
+        else:
+            notify("PMS 이슈", "아직 확인 내역이 없습니다. '지금 PMS 확인'을 먼저 실행하세요.")
 
     def pms_scheduler():
         """매일 지정 시각(check_times)에 1회 PMS 이슈 확인. (앱 시작 시 확인은 하지 않음)"""
@@ -693,7 +704,7 @@ def main():
 
     icon.menu = build_menu(
         state, on_check_now, on_open_settings, on_open_logs, on_quit,
-        on_git_sync_now, on_lab_check_now, on_pms_check_now, on_update_now, on_check_update, on_open_manual,
+        on_git_sync_now, on_lab_check_now, on_pms_check_now, on_pms_view_issues, on_update_now, on_check_update, on_open_manual,
     )
 
     def run_background_loop():

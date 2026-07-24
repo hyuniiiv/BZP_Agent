@@ -5,8 +5,10 @@ BZP PMS(bzp-pms.webcash.work) 이슈 마감 알림 — Playwright(sync)로 로�
 로그인은 폼 기반(#login-id/#login-pw)이고 인증 방식(쿠키/토큰)을 몰라도 되도록,
 로그인된 페이지 컨텍스트 안에서 fetch()를 실행해 응답을 받는다.
 """
+import html
 import logging
 from datetime import date
+from pathlib import Path
 from urllib.parse import quote
 
 from playwright.sync_api import sync_playwright
@@ -107,3 +109,56 @@ def fetch_issue_alerts(pms_id: str, pms_pw: str, project_codes: list[str], upcom
     overdue.sort(key=lambda e: e["due"])
     upcoming.sort(key=lambda e: e["due"])
     return {"overdue": overdue, "upcoming": upcoming}
+
+
+def _rows_html(entries: list[dict], today: date) -> str:
+    if not entries:
+        return '<tr><td colspan="4" class="empty">해당 없음</td></tr>'
+    out = []
+    for e in entries:
+        days = (e["due"] - today).days
+        d_label = f"{-days}일 지남" if days < 0 else ("오늘" if days == 0 else f"{days}일 후")
+        title = html.escape(e["title"])
+        link = html.escape(e["link"] or "", quote=True)
+        title_cell = f'<a href="{link}" target="_blank">{title} ↗</a>' if link else title
+        out.append(
+            "<tr><td>{proj}</td><td>{title}</td><td>{assignee}</td><td>{due} ({d})</td></tr>".format(
+                proj=html.escape(e["project"]), title=title_cell,
+                assignee=html.escape(e["assignee"]), due=e["due"].isoformat(), d=d_label,
+            )
+        )
+    return "\n".join(out)
+
+
+def write_report_html(path, overdue: list[dict], upcoming: list[dict]) -> None:
+    """지연/임박 이슈를 HTML 리포트로 저장 — 항목 클릭 시 flow.team 이슈로 바로 이동."""
+    today = date.today()
+    body = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PMS 이슈 현황</title>
+<style>
+ body{{font-family:'Malgun Gothic','맑은 고딕',system-ui,sans-serif;max-width:900px;margin:0 auto;padding:28px 20px;color:#1f2937;background:#fff}}
+ h1{{font-size:1.4rem;border-bottom:3px solid #2563eb;padding-bottom:8px}}
+ h2{{font-size:1.05rem;margin-top:28px}}
+ .meta{{color:#6b7280;font-size:.85rem}}
+ table{{border-collapse:collapse;width:100%;margin:10px 0}}
+ td,th{{border:1px solid #e2e8f0;padding:7px 10px;text-align:left;font-size:.92rem}}
+ th{{background:#f1f5f9}}
+ .empty{{color:#9ca3af;text-align:center}}
+ a{{color:#2563eb;text-decoration:none}} a:hover{{text-decoration:underline}}
+ @media(prefers-color-scheme:dark){{body{{background:#0f172a;color:#e2e8f0}}th{{background:#1e293b}}td,th{{border-color:#334155}}a{{color:#60a5fa}}}}
+</style></head><body>
+<h1>PMS 이슈 현황</h1>
+<p class="meta">확인 시각: {today.isoformat()} · 이슈 제목을 클릭하면 flow.team으로 이동합니다</p>
+
+<h2>🔴 지연 ({len(overdue)}건)</h2>
+<table><tr><th>프로젝트</th><th>이슈</th><th>담당자</th><th>마감일</th></tr>
+{_rows_html(overdue, today)}
+</table>
+
+<h2>🟡 임박 ({len(upcoming)}건)</h2>
+<table><tr><th>프로젝트</th><th>이슈</th><th>담당자</th><th>마감일</th></tr>
+{_rows_html(upcoming, today)}
+</table>
+</body></html>"""
+    Path(path).write_text(body, encoding="utf-8")
