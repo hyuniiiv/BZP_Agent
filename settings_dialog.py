@@ -115,7 +115,7 @@ def main():
     f_update.grid(row=3, column=0, sticky="ew", padx=12, pady=4)
     auto_update = tk.BooleanVar(value=data["auto_update_enabled"])
     ttk.Checkbutton(
-        f_update, text="자동 확인 (시작 시 + 매일 1회, 끄면 메뉴에서 수동 확인만 가능)",
+        f_update, text="사용 (시작 시 + 매일 1회 확인, 새 버전 발견 시 예고 없이 즉시 적용/재시작. 끄면 수동으로만 확인·적용)",
         variable=auto_update,
     ).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
 

@@ -573,10 +573,10 @@ def main():
                 return
             project_codes = pms_cfg.get("project_codes") or []
             upcoming_days = int(pms_cfg.get("upcoming_days", 3))
-            alerts = pms_client.fetch_issue_alerts(pms_id, pms_pw, project_codes, upcoming_days)
+            snapshot = pms_client.fetch_snapshot(pms_id, pms_pw, project_codes, upcoming_days)
             state.pms_last = datetime.now()
-            overdue, upcoming = alerts["overdue"], alerts["upcoming"]
-            pms_client.write_report_html(PMS_REPORT, overdue, upcoming)
+            overdue, upcoming = snapshot["overdue"], snapshot["upcoming"]
+            pms_client.write_report_html(PMS_REPORT, snapshot)
             tail = "\n(자세히 보려면 트레이 메뉴 'PMS 이슈 보기')"
             if overdue:
                 state.pms_message = f"지연 {len(overdue)}건 · 임박 {len(upcoming)}건"
@@ -685,7 +685,12 @@ def main():
         if info:
             state.update_info = info
             refresh()
-            notify(f"새 버전 v{info['version']}", "트레이 메뉴 → '지금 업데이트'로 설치하세요.")
+            if (config.get("update", {}) or {}).get("enabled", True):
+                # "자동 업데이트 사용" = 예고/클릭 없이 감지 즉시 다운로드→적용까지 자동으로 한다.
+                logger.info(f"새 버전 v{info['version']} 감지 — 자동 적용 시작")
+                _apply_update()
+            else:
+                notify(f"새 버전 v{info['version']}", "트레이 메뉴 → '지금 업데이트'로 설치하세요.")
         elif notify_result:
             notify("업데이트 확인", f"현재 최신 버전입니다 (v{APP_VERSION}).")
 

@@ -64,31 +64,45 @@ def _parse_ymd(s: str | None) -> date | None:
         return None
 
 
-def fetch_issue_alerts(pms_id: str, pms_pw: str, project_codes: list[str], upcoming_days: int = 3) -> dict:
-    """선택한 프로젝트(project_codes 비우면 전체)의 이슈 중 지연/임박 항목을 반환.
-    반환: {"overdue": [...], "upcoming": [...]}, 각 항목은
+STATUS_LABELS = {"0": "대기", "1": "진행", "2": "완료", "3": "피드백", "4": "보류"}
+
+
+def fetch_snapshot(pms_id: str, pms_pw: str, project_codes: list[str], upcoming_days: int = 3) -> dict:
+    """한 번 로그인으로 '프로젝트 현황'과 '이슈관리 통합조회'를 함께 가져와 종합한다.
+    project_codes 비우면 전체 프로젝트 대상. 반환:
+    {"projects": [{code,name,clientName,status,contractDate,pmoUserName}, ...] (필터 적용됨),
+     "issue_total": int, "issue_status_counts": {"대기":N, ...},
+     "overdue": [...], "upcoming": [...]} — 각 이슈 항목은
     {"project": str, "title": str, "assignee": str, "due": date, "link": str}."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
             page = browser.new_page()
             _login(page, pms_id, pms_pw)
+            proj_resp = _fetch_json(page, "/api/bzp/dashboard/projects")
             path = (
                 f"/api/bzp/tasks/section?sectionTitle={quote(ISSUE_SECTION)}"
                 f"&projectType={quote(PROJECT_TYPE)}&page=1&size=200"
             )
-            resp = _fetch_json(page, path)
-            items = (resp.get("data") or {}).get("items") or []
+            issue_resp = _fetch_json(page, path)
         finally:
             browser.close()
 
-    today = date.today()
+    all_projects = (proj_resp.get("data") or {}).get("projects") or []
+    items = (issue_resp.get("data") or {}).get("items") or []
+
     code_filter = set(project_codes) if project_codes else None
+    projects = [p for p in all_projects if code_filter is None or p.get("code") in code_filter]
+    filtered_items = [it for it in items if code_filter is None or it.get("projectCode") in code_filter]
+
+    status_counts: dict[str, int] = {}
+    for it in filtered_items:
+        label = STATUS_LABELS.get(it.get("taskStatus"), it.get("taskStatus") or "?")
+        status_counts[label] = status_counts.get(label, 0) + 1
+
+    today = date.today()
     overdue, upcoming = [], []
-    for it in items:
-        code = it.get("projectCode")
-        if code_filter is not None and code not in code_filter:
-            continue
+    for it in filtered_items:
         # taskStatus "2" = 완료. actualEndDt는 완료 건에서도 비어있는 경우가 있어(실측 확인됨)
         # 완료 여부 판정에 신뢰할 수 없다 — taskStatus를 권위 있는 신호로 사용한다.
         if it.get("taskStatus") == "2":
@@ -110,7 +124,13 @@ def fetch_issue_alerts(pms_id: str, pms_pw: str, project_codes: list[str], upcom
 
     overdue.sort(key=lambda e: e["due"])
     upcoming.sort(key=lambda e: e["due"])
-    return {"overdue": overdue, "upcoming": upcoming}
+    return {
+        "projects": projects,
+        "issue_total": len(filtered_items),
+        "issue_status_counts": status_counts,
+        "overdue": overdue,
+        "upcoming": upcoming,
+    }
 
 
 def _rows_html(entries: list[dict], today: date) -> str:
@@ -132,26 +152,57 @@ def _rows_html(entries: list[dict], today: date) -> str:
     return "\n".join(out)
 
 
-def write_report_html(path, overdue: list[dict], upcoming: list[dict]) -> None:
-    """지연/임박 이슈를 HTML 리포트로 저장 — 항목 클릭 시 flow.team 이슈로 바로 이동."""
+def _project_rows_html(projects: list[dict]) -> str:
+    if not projects:
+        return '<tr><td colspan="5" class="empty">해당 없음</td></tr>'
+    out = []
+    for p in projects:
+        out.append(
+            "<tr><td>{code}</td><td>{client}</td><td>{name}</td><td>{status}</td>"
+            "<td>{contract}</td><td>{pmo}</td></tr>".format(
+                code=html.escape(p.get("code", "")), client=html.escape(p.get("clientName", "")),
+                name=html.escape(p.get("name", "")), status=html.escape(p.get("status", "")),
+                contract=html.escape(p.get("contractDate") or "-"), pmo=html.escape(p.get("pmoUserName", "")),
+            )
+        )
+    return "\n".join(out)
+
+
+def write_report_html(path, snapshot: dict) -> None:
+    """PMS 조회 결과를 HTML 리포트로 저장 — 프로젝트 현황 + 이슈관리 통합조회 요약 + 지연/임박 상세.
+    이슈 제목 클릭 시 flow.team 해당 업무로 바로 이동."""
     today = date.today()
+    projects = snapshot["projects"]
+    overdue, upcoming = snapshot["overdue"], snapshot["upcoming"]
+    status_line = " · ".join(f"{k} {v}" for k, v in snapshot["issue_status_counts"].items()) or "-"
+
     body = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PMS 이슈 현황</title>
 <style>
- body{{font-family:'Malgun Gothic','맑은 고딕',system-ui,sans-serif;max-width:900px;margin:0 auto;padding:28px 20px;color:#1f2937;background:#fff}}
+ body{{font-family:'Malgun Gothic','맑은 고딕',system-ui,sans-serif;max-width:960px;margin:0 auto;padding:28px 20px;color:#1f2937;background:#fff}}
  h1{{font-size:1.4rem;border-bottom:3px solid #2563eb;padding-bottom:8px}}
  h2{{font-size:1.05rem;margin-top:28px}}
  .meta{{color:#6b7280;font-size:.85rem}}
+ .summary{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin:8px 0;font-size:.9rem}}
  table{{border-collapse:collapse;width:100%;margin:10px 0}}
  td,th{{border:1px solid #e2e8f0;padding:7px 10px;text-align:left;font-size:.92rem}}
  th{{background:#f1f5f9}}
  .empty{{color:#9ca3af;text-align:center}}
  a{{color:#2563eb;text-decoration:none}} a:hover{{text-decoration:underline}}
- @media(prefers-color-scheme:dark){{body{{background:#0f172a;color:#e2e8f0}}th{{background:#1e293b}}td,th{{border-color:#334155}}a{{color:#60a5fa}}}}
+ @media(prefers-color-scheme:dark){{body{{background:#0f172a;color:#e2e8f0}}.summary{{background:#1e293b;border-color:#334155}}th{{background:#1e293b}}td,th{{border-color:#334155}}a{{color:#60a5fa}}}}
 </style></head><body>
 <h1>PMS 이슈 현황</h1>
 <p class="meta">확인 시각: {today.isoformat()} · 이슈 제목을 클릭하면 flow.team으로 이동합니다</p>
+
+<h2>프로젝트 관리 — 프로젝트 현황</h2>
+<p class="summary">모니터링 대상 {len(projects)}개 프로젝트</p>
+<table><tr><th>코드</th><th>고객명</th><th>프로젝트명</th><th>상태</th><th>계약일자</th><th>PMO</th></tr>
+{_project_rows_html(projects)}
+</table>
+
+<h2>프로젝트 관리 — 이슈관리 통합조회</h2>
+<p class="summary">전체 {snapshot['issue_total']}건 · {status_line}</p>
 
 <h2>🔴 지연 ({len(overdue)}건)</h2>
 <table><tr><th>프로젝트</th><th>이슈</th><th>담당자</th><th>마감일</th></tr>
