@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 
 import settings_store as store
+import pms_client
 from version import APP_VERSION
 
 RESTART_CODE = 42
@@ -118,9 +119,99 @@ def main():
         variable=auto_update,
     ).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
 
+    # ── PMS 이슈 알림 ─────────────────────
+    f_pms = ttk.LabelFrame(root, text="PMS 이슈 알림 (bzp-pms.webcash.work)")
+    f_pms.grid(row=0, column=1, rowspan=4, sticky="new", padx=(4, 12), pady=(12, 4))
+    pms_on = tk.BooleanVar(value=data["pms_enabled"])
+    ttk.Checkbutton(f_pms, text="사용 (지정 시각에 선택 프로젝트의 지연/임박 이슈 확인)", variable=pms_on).grid(
+        row=0, column=0, columnspan=2, sticky="w", **pad
+    )
+    ttk.Label(f_pms, text="PMS ID").grid(row=1, column=0, sticky="e", **pad)
+    pms_id_var = tk.StringVar(value=data["pms_account_id"])
+    ttk.Entry(f_pms, textvariable=pms_id_var, width=32).grid(row=1, column=1, sticky="w", **pad)
+    ttk.Label(f_pms, text="비밀번호").grid(row=2, column=0, sticky="e", **pad)
+    pms_pw_var = tk.StringVar()
+    ttk.Entry(f_pms, textvariable=pms_pw_var, show="*", width=32).grid(row=2, column=1, sticky="w", **pad)
+    ttk.Label(f_pms, text="(비워두면 기존 비밀번호 유지)", foreground="gray").grid(row=3, column=1, sticky="w", padx=8)
+
+    ttk.Label(f_pms, text="임박 기준(일 이내)").grid(row=4, column=0, sticky="e", **pad)
+    pms_days_var = tk.StringVar(value=str(data["pms_upcoming_days"]))
+    ttk.Entry(f_pms, textvariable=pms_days_var, width=6).grid(row=4, column=1, sticky="w", **pad)
+
+    ttk.Label(f_pms, text="확인 시각").grid(row=5, column=0, sticky="ne", **pad)
+    pms_time_frame = ttk.Frame(f_pms)
+    pms_time_frame.grid(row=5, column=1, sticky="w", **pad)
+    pms_time_vars = []
+    for slot_idx in range(store.GIT_TIME_SLOTS):
+        tvar = tk.StringVar(value=data["pms_check_times"][slot_idx])
+        ttk.Combobox(pms_time_frame, textvariable=tvar, values=time_choices,
+                     state="readonly", width=12).grid(row=slot_idx, column=0, sticky="w", pady=2)
+        pms_time_vars.append(tvar)
+
+    ttk.Label(f_pms, text="모니터링 프로젝트").grid(row=6, column=0, sticky="ne", **pad)
+    pms_project_outer = ttk.Frame(f_pms)
+    pms_project_outer.grid(row=6, column=1, sticky="w", **pad)
+    pms_btn_row = ttk.Frame(pms_project_outer)
+    pms_btn_row.pack(anchor="w")
+    pms_refresh_status = ttk.Label(pms_project_outer, text="", foreground="gray")
+    pms_checklist_frame = ttk.Frame(pms_project_outer)
+    pms_checklist_frame.pack(anchor="w", pady=(4, 0))
+
+    current_projects = list(data["pms_known_projects"])
+    project_vars: dict[str, tk.BooleanVar] = {}
+
+    def render_projects():
+        for w in pms_checklist_frame.winfo_children():
+            w.destroy()
+        project_vars.clear()
+        selected = set(data["pms_project_codes"])
+        if not current_projects:
+            ttk.Label(pms_checklist_frame, text="(새로고침으로 프로젝트 목록을 불러오세요)", foreground="gray").grid(row=0, column=0)
+            return
+        for i, proj in enumerate(current_projects):
+            code = proj["code"]
+            var = tk.BooleanVar(value=code in selected)
+            project_vars[code] = var
+            ttk.Checkbutton(pms_checklist_frame, text=f"{code} {proj['name']}", variable=var).grid(
+                row=i // 2, column=i % 2, sticky="w", padx=(0, 12)
+            )
+
+    def select_all():
+        for v in project_vars.values():
+            v.set(True)
+
+    def select_none():
+        for v in project_vars.values():
+            v.set(False)
+
+    def do_refresh():
+        pid = pms_id_var.get().strip()
+        pw = pms_pw_var.get() or store.load_env_value("PMS_PW")
+        if not pid or not pw:
+            pms_refresh_status.config(text="ID/비밀번호를 먼저 입력하세요", foreground="red")
+            return
+        pms_refresh_status.pack(anchor="w")
+        pms_refresh_status.config(text="조회 중...", foreground="gray")
+        root.update_idletasks()
+        try:
+            fetched = pms_client.fetch_projects(pid, pw)
+        except Exception as exc:
+            pms_refresh_status.config(text=f"조회 실패: {exc}", foreground="red")
+            return
+        current_projects[:] = [
+            {"code": p.get("code", ""), "name": p.get("name", "")} for p in fetched
+        ]
+        render_projects()
+        pms_refresh_status.config(text=f"{len(current_projects)}개 프로젝트 불러옴", foreground="green")
+
+    ttk.Button(pms_btn_row, text="새로고침", command=do_refresh).pack(side="left")
+    ttk.Button(pms_btn_row, text="전체 선택", command=select_all).pack(side="left", padx=(6, 0))
+    ttk.Button(pms_btn_row, text="전체 해제", command=select_none).pack(side="left", padx=(6, 0))
+    render_projects()
+
     # ── 상태 + 버튼 ───────────────────────
     status = ttk.Label(root, text="", foreground="green")
-    status.grid(row=4, column=0, pady=(6, 0))
+    status.grid(row=4, column=0, columnspan=2, pady=(6, 0))
 
     def on_save():
         values = {
@@ -140,6 +231,13 @@ def main():
             "lab_interval": store.label_interval(lab_iv.get(), 60),
             "lab_show_console": lab_console.get(),
             "auto_update_enabled": auto_update.get(),
+            "pms_enabled": pms_on.get(),
+            "pms_account_id": pms_id_var.get().strip(),
+            "pms_account_pw": pms_pw_var.get(),
+            "pms_project_codes": [code for code, v in project_vars.items() if v.get()],
+            "pms_known_projects": current_projects,
+            "pms_upcoming_days": int(pms_days_var.get().strip() or 3),
+            "pms_check_times": [v.get() for v in pms_time_vars],
         }
         try:
             store.save_settings(values)
@@ -150,7 +248,7 @@ def main():
         root.after(800, lambda: sys.exit(RESTART_CODE))
 
     btns = ttk.Frame(root)
-    btns.grid(row=5, column=0, pady=(6, 12))
+    btns.grid(row=5, column=0, columnspan=2, pady=(6, 12))
     ttk.Button(btns, text="저장 후 적용", width=14, command=on_save).pack(side="left", padx=5)
     ttk.Button(btns, text="취소", width=10, command=root.destroy).pack(side="left", padx=5)
 

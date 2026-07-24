@@ -89,6 +89,36 @@ def normalize_git_times(slots) -> list[str]:
     return sorted(out) if out else ["08:00"]
 
 
+def load_env_value(key: str) -> str:
+    """.env에서 임의의 key=value 한 줄을 읽는다 (없으면 빈 문자열)."""
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        return ""
+    for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1]
+    return ""
+
+
+def save_env_pairs(pairs: dict) -> None:
+    """지정된 key=value 쌍을 .env에 반영 (다른 줄은 보존, 없던 키는 추가)."""
+    env_path = BASE_DIR / ".env"
+    lines = []
+    seen = set()
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+            matched_key = next((k for k in pairs if line.startswith(f"{k}=")), None)
+            if matched_key:
+                lines.append(f"{matched_key}={pairs[matched_key]}")
+                seen.add(matched_key)
+            else:
+                lines.append(line)
+    for k, v in pairs.items():
+        if k not in seen:
+            lines.append(f"{k}={v}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _load_yaml() -> dict:
     if not CONFIG_PATH.exists():
         return {}
@@ -110,6 +140,7 @@ def load_settings() -> dict:
     gs = cfg.get("git_sync", {}) or {}
     ld = cfg.get("lab_dev", {}) or {}
     up = cfg.get("update", {}) or {}
+    pm = cfg.get("pms", {}) or {}
 
     account_id = ""
     try:
@@ -135,6 +166,12 @@ def load_settings() -> dict:
         "lab_interval": int(ld.get("check_interval", 60)),
         "lab_show_console": bool(ld.get("show_console", False)),
         "auto_update_enabled": bool(up.get("enabled", True)),
+        "pms_enabled": bool(pm.get("enabled", False)),
+        "pms_account_id": load_env_value("PMS_ID"),
+        "pms_project_codes": list(pm.get("project_codes") or []),
+        "pms_known_projects": list(pm.get("known_projects") or []),
+        "pms_upcoming_days": int(pm.get("upcoming_days", 3)),
+        "pms_check_times": load_git_times({"sync_times": pm.get("check_times")}),
     }
 
 
@@ -170,6 +207,14 @@ def save_settings(values: dict) -> None:
     up = cfg.setdefault("update", {})
     up["enabled"] = bool(values["auto_update_enabled"])
 
+    pm = cfg.setdefault("pms", {})
+    pm["enabled"] = bool(values["pms_enabled"])
+    pm["project_codes"] = list(values.get("pms_project_codes") or [])
+    pm["upcoming_days"] = int(values["pms_upcoming_days"])
+    pm["check_times"] = normalize_git_times(values.get("pms_check_times", []))
+    if values.get("pms_known_projects"):
+        pm["known_projects"] = values["pms_known_projects"]
+
     _dump_yaml(cfg)
 
     # 계정: ID가 입력된 경우에만. "빈 PW = 기존 유지" 규칙 보존.
@@ -178,3 +223,8 @@ def save_settings(values: dict) -> None:
         from credentials_dialog import save_credentials, load_current_pw
         pw = values.get("account_pw") or load_current_pw()
         save_credentials(account_id, pw)
+
+    pms_id = (values.get("pms_account_id") or "").strip()
+    if pms_id:
+        pms_pw = values.get("pms_account_pw") or load_env_value("PMS_PW")
+        save_env_pairs({"PMS_ID": pms_id, "PMS_PW": pms_pw})

@@ -30,3 +30,10 @@ lab_dev:
   show_console: false
 update:
   enabled: true
+pms:
+  enabled: false
+  project_codes: []
+  known_projects: []
+  upcoming_days: 3
+  check_times:
+  - 09:00

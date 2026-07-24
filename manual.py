@@ -29,6 +29,7 @@ _MANUAL_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
  <li><b>네트워크 인증 자동화</b> — 사내망 인증 페이지 자동 로그인</li>
  <li><b>GitLab 동기화</b> (개발자용, 선택) — 지정 시각에 저장소 최신화</li>
  <li><b>lab dev 서버 감시</b> (개발자용, 선택) — 3003 꺼지면 자동 재실행</li>
+ <li><b>PMS 이슈 알림</b> (선택) — 선택한 프로젝트의 지연/임박 이슈를 지정 시각에 확인</li>
  <li><b>자동 업데이트</b> — 새 버전 나오면 알림 → 원클릭 설치</li>
 </ul>
 
@@ -60,7 +61,15 @@ _MANUAL_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
  <b>lab dev 감시</b> — [사용] 체크 후 저장소 경로 지정. "콘솔 창 보기"를 켜면 dev 서버 로그가 콘솔 창으로 실시간 표시됩니다.
 </div>
 
-<h2>6. 문제 해결</h2>
+<h2>6. PMS 이슈 알림 (선택)</h2>
+<div class="box">
+ BZP PMS(bzp-pms.webcash.work)에 로그인해 선택한 프로젝트의 이슈 중 <b>마감일이 지난(지연)</b> 또는
+ <b>임박한(기준일 이내)</b> 항목을 지정 시각에 확인해 알려줍니다.<br>
+ 환경설정 → "PMS 이슈 알림"에서 [사용] 체크, PMS 계정 입력, <b>새로고침</b>으로 프로젝트 목록을 불러온 뒤
+ 모니터링할 프로젝트를 체크하고 저장하세요. 지연 이슈가 있으면 즉시 알림이 뜨고, 없으면 조용히 대기합니다.
+</div>
+
+<h2>7. 문제 해결</h2>
 <ul>
  <li><b>종료 후 다시 실행하려면</b>: 시작 메뉴에서 <b>"BZP Agent"</b>를 검색해 클릭 (또는 Windows 재로그인 시 자동 실행)</li>
  <li>트레이 우클릭 → <b>로그 폴더 열기</b>에서 실행 로그 확인</li>
@@ -68,8 +77,8 @@ _MANUAL_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
  <li>재설치가 필요하면 배포받은 <code>install.bat</code>을 다시 실행 (계정·설정 유지됨)</li>
 </ul>
 
-<h2>7. 참고</h2>
-<p>네트워크 인증은 사내망 인증 페이지에 대한 로그인만 자동화합니다. 입력한 계정정보는 본인 PC의 설치 폴더(<code>%LOCALAPPDATA%\\BZP_Agent\\.env</code>)에만 저장되며 외부로 전송되지 않습니다.</p>
+<h2>8. 참고</h2>
+<p>네트워크 인증·PMS 계정정보는 본인 PC의 설치 폴더(<code>%LOCALAPPDATA%\\BZP_Agent\\.env</code>)에만 저장되며, 해당 서비스(사내망 인증 페이지 / BZP PMS) 로그인 용도로만 사용되고 그 외 외부로 전송되지 않습니다.</p>
 </body></html>"""
 
 

@@ -49,6 +49,7 @@ import git_sync
 import lab_dev
 import updater
 import manual
+import pms_client
 
 # 업데이트 확인 주기(초): 시작 시 1회 + 이후 하루 1회
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60
@@ -58,6 +59,7 @@ LOG_FILE.parent.mkdir(exist_ok=True)
 GIT_SYNC_LOG = BASE_DIR / "logs" / "git_sync.log"
 LAB_DEV_LOG = BASE_DIR / "logs" / "lab_dev.log"            # 감시 이벤트(Python 로깅)
 LAB_DEV_SERVER_LOG = BASE_DIR / "logs" / "lab_dev_server.log"  # pnpm dev 서버 stdout/stderr
+PMS_LOG = BASE_DIR / "logs" / "pms.log"
 ENV_FILE = BASE_DIR / ".env"
 
 logging.basicConfig(
@@ -81,6 +83,7 @@ def _attach_file_logger(name: str, path: Path) -> logging.Logger:
 
 _attach_file_logger("git_sync", GIT_SYNC_LOG)
 _attach_file_logger("lab_dev", LAB_DEV_LOG)
+_attach_file_logger("pms_client", PMS_LOG)
 
 _ICON_COLORS = {
     "ok": (46, 204, 113, 255),       # 초록 — 인증됨
@@ -160,6 +163,9 @@ class TrayState:
         self.lab_message = "대기 중"
         self.git_status = "off"   # off/idle/ok/attention
         self.lab_status = "off"   # off/idle/ok/error
+        self.pms_last: datetime | None = None
+        self.pms_message = "대기 중"
+        self.pms_status = "off"   # off/idle/ok/attention
         # 자동 업데이트: 새 버전 감지 시 {"version","url","notes"} 저장
         self.update_info: dict | None = None
 
@@ -168,13 +174,14 @@ def compute_icon_status(state: "TrayState") -> str:
     """인증/git/lab/업데이트 상태를 종합해 아이콘 색상 키를 결정한다.
     빨강(fail) > 노랑(checking) > 초록(ok) > 회색(idle=모든 기능 꺼짐) 우선순위."""
     # 1) 어느 기능이든 문제 → 빨강
-    if state.status == "fail" or state.git_status == "attention" or state.lab_status == "error":
+    if state.status == "fail" or state.git_status == "attention" or state.lab_status == "error" or state.pms_status == "attention":
         return "fail"
     # 2) 인증 확인 중 또는 새 버전 있음 → 노랑
     if state.status == "checking" or state.update_info:
         return "checking"
-    # 3) 활성 기능 중 하나라도 정상/동작 중 → 초록 (인증 안 써도 git·lab 정상이면 초록)
-    if state.status in ("ok", "idle") or state.git_status in ("ok", "idle") or state.lab_status in ("ok", "idle"):
+    # 3) 활성 기능 중 하나라도 정상/동작 중 → 초록 (인증 안 써도 git·lab·PMS 정상이면 초록)
+    if (state.status in ("ok", "idle") or state.git_status in ("ok", "idle")
+            or state.lab_status in ("ok", "idle") or state.pms_status in ("ok", "idle")):
         return "ok"
     # 4) 모든 기능 꺼짐 → 회색
     return "idle"
@@ -327,6 +334,7 @@ def build_menu(
     on_quit,
     on_git_sync_now,
     on_lab_check_now,
+    on_pms_check_now,
     on_update_now,
     on_check_update,
     on_open_manual,
@@ -345,6 +353,10 @@ def build_menu(
     def lab_text(_item):
         return f"lab 3003: {state.lab_message}"
 
+    def pms_text(_item):
+        ts = state.pms_last.strftime("%m/%d %H:%M") if state.pms_last else "-"
+        return f"PMS 이슈: {state.pms_message} ({ts})"
+
     def version_text(_item):
         if state.update_info:
             return f"🔔 새 버전 v{state.update_info['version']} 있음 (현재 v{APP_VERSION})"
@@ -358,10 +370,12 @@ def build_menu(
         pystray.MenuItem(time_text, None, enabled=False),
         pystray.MenuItem(git_text, None, enabled=False),
         pystray.MenuItem(lab_text, None, enabled=False),
+        pystray.MenuItem(pms_text, None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("지금 인증 확인", on_check_now),
         pystray.MenuItem("지금 GitLab 동기화", on_git_sync_now),
         pystray.MenuItem("지금 lab 서버 확인", on_lab_check_now),
+        pystray.MenuItem("지금 PMS 확인", on_pms_check_now),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("환경설정...", on_set_credentials),
         pystray.MenuItem("사용 설명서", on_open_manual),
@@ -381,10 +395,13 @@ def main():
     loop_holder: dict = {}
     git_cfg = config.get("git_sync", {}) or {}
     lab_cfg = config.get("lab_dev", {}) or {}
+    pms_cfg = config.get("pms", {}) or {}
     # 아이콘 종합 계산용 초기 상태: 꺼진 기능은 off, 켜진 기능은 결과 나오기 전 idle
     state.git_status = "idle" if git_cfg.get("enabled", False) else "off"
     state.lab_status = "idle" if lab_cfg.get("enabled", False) else "off"
+    state.pms_status = "idle" if pms_cfg.get("enabled", False) else "off"
     git_lock = threading.Lock()  # 스케줄러/메뉴 동시 실행 방지 (index.lock 충돌 방지)
+    pms_lock = threading.Lock()  # PMS 확인 중복 실행 방지
 
     # lab dev 모니터는 미리 생성 — 시작 시 첫 동기화가 변경을 반영하면 즉시 재기동할 수 있어야 함
     lab_monitor: lab_dev.LabDevMonitor | None = None
@@ -538,6 +555,70 @@ def main():
 
         threading.Thread(target=_do, daemon=True).start()
 
+    def run_pms_check(notify_ok: bool = False):
+        """PMS 선택 프로젝트의 지연/임박 이슈 확인. 락으로 중복 실행 방지."""
+        if not pms_lock.acquire(blocking=False):
+            logger.info("PMS 확인 이미 진행 중 — 건너뜀")
+            return
+        try:
+            pms_id = os.environ.get("PMS_ID", "")
+            pms_pw = os.environ.get("PMS_PW", "")
+            if not pms_id or not pms_pw:
+                state.pms_message = "계정 미설정"
+                state.pms_status = "attention"
+                refresh()
+                return
+            project_codes = pms_cfg.get("project_codes") or []
+            upcoming_days = int(pms_cfg.get("upcoming_days", 3))
+            alerts = pms_client.fetch_issue_alerts(pms_id, pms_pw, project_codes, upcoming_days)
+            state.pms_last = datetime.now()
+            overdue, upcoming = alerts["overdue"], alerts["upcoming"]
+            if overdue:
+                state.pms_message = f"지연 {len(overdue)}건 · 임박 {len(upcoming)}건"
+                state.pms_status = "attention"
+                lines = "\n".join(f"- {e['project']} {e['title']} (마감 {e['due']})" for e in overdue[:5])
+                notify("PMS 이슈 지연", lines)
+            elif upcoming:
+                state.pms_message = f"임박 {len(upcoming)}건"
+                state.pms_status = "ok"
+                if notify_ok:
+                    lines = "\n".join(f"- {e['project']} {e['title']} (마감 {e['due']})" for e in upcoming[:5])
+                    notify("PMS 임박 이슈", lines)
+            else:
+                state.pms_message = "지연/임박 이슈 없음"
+                state.pms_status = "ok"
+                if notify_ok:
+                    notify("PMS 확인", "지연/임박 이슈가 없습니다.")
+            logging.getLogger("pms_client").info(
+                f"확인 결과: 지연 {len(overdue)}건, 임박 {len(upcoming)}건 (대상 프로젝트 {len(project_codes) or '전체'})"
+            )
+            refresh()
+        except Exception as e:
+            logging.getLogger("pms_client").error(f"확인 중 예외: {e}")
+            state.pms_message = f"오류: {e}"
+            state.pms_status = "attention"
+            refresh()
+        finally:
+            pms_lock.release()
+
+    def on_pms_check_now(_icon, _item):
+        threading.Thread(target=lambda: run_pms_check(notify_ok=True), daemon=True).start()
+
+    def pms_scheduler():
+        """매일 지정 시각(check_times)에 1회 PMS 이슈 확인. (앱 시작 시 확인은 하지 않음)"""
+        if not pms_cfg.get("enabled", False):
+            return
+        check_times = pms_cfg.get("check_times") or ["09:00"]
+        done: set = set()
+        while True:
+            time.sleep(30)
+            now = datetime.now()
+            hm = f"{now.hour:02d}:{now.minute:02d}"
+            key = (now.date(), hm)
+            if hm in check_times and key not in done:
+                done.add(key)
+                run_pms_check()
+
     def git_sync_scheduler():
         """매일 지정 시각(sync_times)에 1회 동기화. (앱 시작 시 동기화는 하지 않음)"""
         if not git_cfg.get("enabled", False):
@@ -612,7 +693,7 @@ def main():
 
     icon.menu = build_menu(
         state, on_check_now, on_open_settings, on_open_logs, on_quit,
-        on_git_sync_now, on_lab_check_now, on_update_now, on_check_update, on_open_manual,
+        on_git_sync_now, on_lab_check_now, on_pms_check_now, on_update_now, on_check_update, on_open_manual,
     )
 
     def run_background_loop():
@@ -629,6 +710,7 @@ def main():
     threading.Thread(target=run_background_loop, daemon=True).start()
     threading.Thread(target=git_sync_scheduler, daemon=True).start()
     threading.Thread(target=lab_dev_watch, daemon=True).start()
+    threading.Thread(target=pms_scheduler, daemon=True).start()
     threading.Thread(target=update_check_scheduler, daemon=True).start()
 
     logger.info("네트워크 인증 트레이 앱 시작")
