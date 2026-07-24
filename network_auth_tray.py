@@ -361,6 +361,7 @@ def build_menu(
         pystray.MenuItem("지금 인증 확인", on_check_now),
         pystray.MenuItem("지금 GitLab 동기화", on_git_sync_now),
         pystray.MenuItem("지금 lab 서버 확인", on_lab_check_now),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("환경설정...", on_set_credentials),
         pystray.MenuItem("사용 설명서", on_open_manual),
         pystray.MenuItem("로그 폴더 열기", on_open_logs),
@@ -599,7 +600,11 @@ def main():
         threading.Thread(target=lambda: _run_update_check(notify_result=True), daemon=True).start()
 
     def update_check_scheduler():
-        """앱 시작 시 1회 + 이후 하루 1회 최신 버전 확인."""
+        """앱 시작 시 1회 + 이후 하루 1회 최신 버전 자동 확인 (환경설정에서 끄면 미실행).
+        꺼져 있어도 메뉴의 '업데이트 확인'(수동)은 항상 동작한다."""
+        if not (config.get("update", {}) or {}).get("enabled", True):
+            logger.info("자동 업데이트 확인 비활성화됨 (enabled=false) — 수동 확인만 가능")
+            return
         while True:
             _run_update_check()
             time.sleep(UPDATE_CHECK_INTERVAL)

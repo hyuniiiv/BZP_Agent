@@ -109,6 +109,7 @@ def load_settings() -> dict:
     na = cfg.get("network_auth", {}) or {}
     gs = cfg.get("git_sync", {}) or {}
     ld = cfg.get("lab_dev", {}) or {}
+    up = cfg.get("update", {}) or {}
 
     account_id = ""
     try:
@@ -133,6 +134,7 @@ def load_settings() -> dict:
         "lab_url": ld.get("url", ""),
         "lab_interval": int(ld.get("check_interval", 60)),
         "lab_show_console": bool(ld.get("show_console", False)),
+        "auto_update_enabled": bool(up.get("enabled", True)),
     }
 
 
@@ -164,6 +166,9 @@ def save_settings(values: dict) -> None:
     ld["url"] = values["lab_url"]
     ld["check_interval"] = int(values["lab_interval"])
     ld["show_console"] = bool(values["lab_show_console"])
+
+    up = cfg.setdefault("update", {})
+    up["enabled"] = bool(values["auto_update_enabled"])
 
     _dump_yaml(cfg)
 

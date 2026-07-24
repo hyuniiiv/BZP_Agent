@@ -109,9 +109,18 @@ def main():
     lab_iv = tk.StringVar(value=store.interval_label(data["lab_interval"]))
     ttk.Combobox(f_lab, textvariable=lab_iv, values=poll_labels, state="readonly", width=10).grid(row=3, column=1, sticky="w", **pad)
 
+    # ── 자동 업데이트 ─────────────────────
+    f_update = ttk.LabelFrame(root, text="자동 업데이트")
+    f_update.grid(row=3, column=0, sticky="ew", padx=12, pady=4)
+    auto_update = tk.BooleanVar(value=data["auto_update_enabled"])
+    ttk.Checkbutton(
+        f_update, text="자동 확인 (시작 시 + 매일 1회, 끄면 메뉴에서 수동 확인만 가능)",
+        variable=auto_update,
+    ).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
+
     # ── 상태 + 버튼 ───────────────────────
     status = ttk.Label(root, text="", foreground="green")
-    status.grid(row=3, column=0, pady=(6, 0))
+    status.grid(row=4, column=0, pady=(6, 0))
 
     def on_save():
         values = {
@@ -130,6 +139,7 @@ def main():
             "lab_url": lab_url.get().strip(),
             "lab_interval": store.label_interval(lab_iv.get(), 60),
             "lab_show_console": lab_console.get(),
+            "auto_update_enabled": auto_update.get(),
         }
         try:
             store.save_settings(values)
@@ -140,7 +150,7 @@ def main():
         root.after(800, lambda: sys.exit(RESTART_CODE))
 
     btns = ttk.Frame(root)
-    btns.grid(row=4, column=0, pady=(6, 12))
+    btns.grid(row=5, column=0, pady=(6, 12))
     ttk.Button(btns, text="저장 후 적용", width=14, command=on_save).pack(side="left", padx=5)
     ttk.Button(btns, text="취소", width=10, command=root.destroy).pack(side="left", padx=5)
 

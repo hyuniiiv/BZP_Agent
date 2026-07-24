@@ -28,3 +28,5 @@ lab_dev:
   - 4401
   check_interval: 60
   show_console: false
+update:
+  enabled: true
