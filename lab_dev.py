@@ -10,6 +10,7 @@ lab dev 서버(localhost:3003) 감시·자동 재실행 — 트레이 앱 부가
 
 subprocess + urllib(stdlib)만 사용 — 새 파이썬 의존성 없음.
 """
+import ctypes
 import logging
 import subprocess
 import threading
@@ -18,6 +19,28 @@ import urllib.request
 from pathlib import Path
 
 logger = logging.getLogger("lab_dev")
+
+
+class _MEMORYSTATUSEX(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
+
+def _mem_snapshot() -> str:
+    """현재 시스템 메모리 사용률/여유량을 한 줄로. 재시작 원인이 메모리 부족인지 진단하기 위함."""
+    try:
+        st = _MEMORYSTATUSEX()
+        st.dwLength = ctypes.sizeof(st)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+        avail_mb = st.ullAvailPhys // (1024 * 1024)
+        return f"메모리 사용률 {st.dwMemoryLoad}% (여유 {avail_mb}MB)"
+    except Exception:
+        return "메모리 확인 불가"
 
 # 재실행 후 부팅 유예(초). 이 시간 안에는 헬스체크 실패해도 재시작하지 않는다.
 STARTUP_GRACE = 90
@@ -133,11 +156,15 @@ def _start_dev(repo: str, command: str, log_path: Path, show_console: bool = Fal
             "  [void]$vt::GetConsoleMode($h, [ref]$m); [void]$vt::SetConsoleMode($h, $m -bor 4)\n"
             "} catch {}\n"
             f"Set-Location -LiteralPath '{repo}'\n"
+            # Tee-Object/Out-File 기본 인코딩은 Windows PowerShell 5.1에서 UTF-16LE라
+            # 파일이 다른 도구(Python 등)로 읽을 때 깨진다. UTF-8로 고정.
+            "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'\n"
             f"Write-Host '[dev 시작: {command}]' -ForegroundColor Cyan\n"
             # 주의: PowerShell 5.1에서 네이티브 명령에 '2>&1'을 쓰면 stderr가 NativeCommandError로
             # 감싸져 정상 경고까지 빨간 에러 블록으로 보인다. cmd 레벨에서 병합(평문)한 뒤 PS로 받는다.
             f"cmd /c '{command} 2>&1' | Tee-Object -FilePath '{log_path}' -Append\n"
-            f"Add-Content -Path '{log_path}' -Value \"[dev 종료됨: exit=$LASTEXITCODE 시각=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')]\"\n"
+            # Add-Content 기본 인코딩은 Out-File과 달리 시스템 ANSI라 -Encoding을 별도로 지정해야 한다.
+            f"Add-Content -Path '{log_path}' -Encoding utf8 -Value \"[dev 종료됨: exit=$LASTEXITCODE 시각=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')]\"\n"
             "Write-Host ''; Write-Host '[dev 서버가 종료되었습니다. 위 로그에서 원인을 확인하세요. 곧 자동 재실행됩니다.]' -ForegroundColor Yellow\n",
             encoding="utf-8-sig",
         )
@@ -176,10 +203,13 @@ class LabDevMonitor:
         self._last_start_monotonic: float | None = None
         self._lock = threading.Lock()  # 감시 스레드 / 동기화 연동 / 메뉴 동시 호출 방지
 
-    def ensure_running(self, force: bool = False) -> LabDevResult:
-        """서버가 죽어 있으면 포트 정리 후 재실행. force=True면 유예 무시하고 즉시 재실행."""
+    def ensure_running(self, force: bool = False, reason: str | None = None) -> LabDevResult:
+        """서버가 죽어 있으면 포트 정리 후 재실행. force=True면 유예 무시하고 즉시 재실행.
+        reason: 로그에 남길 트리거 사유(예: "수동 요청", "GitLab 변경 반영"). 미지정 시 자동 판단."""
         if not Path(self.repo).exists():
             return LabDevResult("error", f"repo 경로 없음: {self.repo}")
+        if reason is None:
+            reason = "수동/외부 요청" if force else "응답 없음 감지"
 
         # 동시 재실행 방지.
         # force(동기화 후 재기동·메뉴 요청)는 반드시 실행해야 하므로 락을 대기해서라도 획득한다.
@@ -196,6 +226,12 @@ class LabDevMonitor:
             if not force and self._within_grace():
                 return LabDevResult("grace", "재실행 후 부팅 대기 중")
 
+            # 직전 재실행 이후 생존 시간 — 원인 진단용(예: 항상 비슷한 초에 죽으면 특정 트리거 의심)
+            uptime = (
+                f"{time.monotonic() - self._last_start_monotonic:.0f}초"
+                if self._last_start_monotonic is not None else "N/A(최초 실행)"
+            )
+
             # 직전에 띄운 프로세스(콘솔 창 포함)를 먼저 정리 — 콘솔 창 누적 방지
             if self._launched_pid:
                 _kill_tree(self._launched_pid)
@@ -208,7 +244,10 @@ class LabDevMonitor:
             self._launched_pid = proc.pid
             self._last_start_monotonic = time.monotonic()
             detail = f" (종료 PID: {', '.join(killed)})" if killed else ""
-            logger.info(f"lab dev 재실행: {self.command}{detail}")
+            logger.info(
+                f"lab dev 재실행 [사유: {reason} | 직전 생존시간: {uptime} | {_mem_snapshot()}]: "
+                f"{self.command}{detail}"
+            )
             return LabDevResult("restarted", f"재실행됨{detail}")
         finally:
             self._lock.release()

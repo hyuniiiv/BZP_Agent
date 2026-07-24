@@ -507,7 +507,7 @@ def main():
                 notify("GitLab 동기화", result.message)
             # 실제 변경이 반영됐을 때만 dev 서버 재기동 (HMR이 새 파일·삭제·의존성 변경은 못 따라잡음)
             if result.ok and result.changed and lab_monitor is not None:
-                restart = lab_monitor.ensure_running(force=True)
+                restart = lab_monitor.ensure_running(force=True, reason="GitLab 변경 반영")
                 state.lab_message = _lab_status_label(restart)
                 state.lab_status = "error" if restart.action == "error" else "ok"
                 refresh()
