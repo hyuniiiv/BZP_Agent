@@ -65,15 +65,17 @@ def _parse_ymd(s: str | None) -> date | None:
 
 
 STATUS_LABELS = {"0": "대기", "1": "진행", "2": "완료", "3": "피드백", "4": "보류"}
+# 실측(UI 렌더 텍스트 대조)으로 확인된 매핑. 값이 없는 이슈는 "-"로 표시.
+PRIORITY_LABELS = {"0": "낮음", "1": "보통", "2": "높음", "3": "긴급"}
 
 
 def fetch_snapshot(pms_id: str, pms_pw: str, project_codes: list[str], upcoming_days: int = 3) -> dict:
     """한 번 로그인으로 '프로젝트 현황'과 '이슈관리 통합조회'를 함께 가져와 종합한다.
     project_codes 비우면 전체 프로젝트 대상. 반환:
     {"projects": [{code,name,clientName,status,contractDate,pmoUserName}, ...] (필터 적용됨),
-     "issue_total": int, "issue_status_counts": {"대기":N, ...},
+     "issues": [...전체 목록...], "issue_total": int, "issue_status_counts": {"대기":N, ...},
      "overdue": [...], "upcoming": [...]} — 각 이슈 항목은
-    {"project": str, "title": str, "assignee": str, "due": date, "link": str}."""
+    {"project","title","priority","status","assignee","pm","start","due","actual_start","actual_end","progress","link"}."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
@@ -93,39 +95,45 @@ def fetch_snapshot(pms_id: str, pms_pw: str, project_codes: list[str], upcoming_
 
     code_filter = set(project_codes) if project_codes else None
     projects = [p for p in all_projects if code_filter is None or p.get("code") in code_filter]
+    pmo_by_code = {p.get("code"): p.get("pmoUserName", "") for p in all_projects}
     filtered_items = [it for it in items if code_filter is None or it.get("projectCode") in code_filter]
 
-    status_counts: dict[str, int] = {}
-    for it in filtered_items:
-        label = STATUS_LABELS.get(it.get("taskStatus"), it.get("taskStatus") or "?")
-        status_counts[label] = status_counts.get(label, 0) + 1
-
     today = date.today()
-    overdue, upcoming = [], []
+    issues, overdue, upcoming, status_counts = [], [], [], {}
     for it in filtered_items:
-        # taskStatus "2" = 완료. actualEndDt는 완료 건에서도 비어있는 경우가 있어(실측 확인됨)
-        # 완료 여부 판정에 신뢰할 수 없다 — taskStatus를 권위 있는 신호로 사용한다.
-        if it.get("taskStatus") == "2":
-            continue
+        status_label = STATUS_LABELS.get(it.get("taskStatus"), it.get("taskStatus") or "-")
+        status_counts[status_label] = status_counts.get(status_label, 0) + 1
         due = _parse_ymd(it.get("endDt"))
-        if due is None:
-            continue
         entry = {
             "project": it.get("projectName", ""),
             "title": it.get("title", ""),
+            "priority": PRIORITY_LABELS.get(it.get("priority"), "-"),
+            "status": status_label,
             "assignee": it.get("author", ""),
+            "pm": pmo_by_code.get(it.get("projectCode"), ""),
+            "start": _parse_ymd(it.get("startDt")),
             "due": due,
+            "actual_start": _parse_ymd(it.get("actualStartDt")),
+            "actual_end": _parse_ymd(it.get("actualEndDt")),
+            "progress": it.get("progress"),
             "link": it.get("link", ""),
         }
+        issues.append(entry)
+        # taskStatus "2" = 완료. actualEndDt는 완료 건에서도 비어있는 경우가 있어(실측 확인됨)
+        # 완료 여부 판정에 신뢰할 수 없다 — taskStatus를 권위 있는 신호로 사용한다.
+        if it.get("taskStatus") == "2" or due is None:
+            continue
         if due < today:
             overdue.append(entry)
         elif (due - today).days <= upcoming_days:
             upcoming.append(entry)
 
+    issues.sort(key=lambda e: (e["project"], e["title"]))
     overdue.sort(key=lambda e: e["due"])
     upcoming.sort(key=lambda e: e["due"])
     return {
         "projects": projects,
+        "issues": issues,
         "issue_total": len(filtered_items),
         "issue_status_counts": status_counts,
         "overdue": overdue,
@@ -147,6 +155,28 @@ def _rows_html(entries: list[dict], today: date) -> str:
             "<tr><td>{proj}</td><td>{title}</td><td>{assignee}</td><td>{due} ({d})</td></tr>".format(
                 proj=html.escape(e["project"]), title=title_cell,
                 assignee=html.escape(e["assignee"]), due=e["due"].isoformat(), d=d_label,
+            )
+        )
+    return "\n".join(out)
+
+
+def _issue_rows_html(issues: list[dict]) -> str:
+    if not issues:
+        return '<tr><td colspan="11" class="empty">해당 없음</td></tr>'
+    out = []
+    for e in issues:
+        title = html.escape(e["title"])
+        link = html.escape(e["link"] or "", quote=True)
+        title_cell = f'<a href="{link}" target="_blank">{title} ↗</a>' if link else title
+        fmt = lambda d: d.isoformat() if d else "-"  # noqa: E731
+        progress = f"{e['progress']}%" if e.get("progress") is not None else "-"
+        out.append(
+            "<tr><td>{proj}</td><td>{title}</td><td>{pri}</td><td>{status}</td><td>{assignee}</td>"
+            "<td>{pm}</td><td>{start}</td><td>{due}</td><td>{astart}</td><td>{aend}</td><td>{prog}</td></tr>".format(
+                proj=html.escape(e["project"]), title=title_cell, pri=html.escape(e["priority"]),
+                status=html.escape(e["status"]), assignee=html.escape(e["assignee"]), pm=html.escape(e["pm"]),
+                start=fmt(e["start"]), due=fmt(e["due"]), astart=fmt(e["actual_start"]), aend=fmt(e["actual_end"]),
+                prog=progress,
             )
         )
     return "\n".join(out)
@@ -203,6 +233,10 @@ def write_report_html(path, snapshot: dict) -> None:
 
 <h2>프로젝트 관리 — 이슈관리 통합조회</h2>
 <p class="summary">전체 {snapshot['issue_total']}건 · {status_line}</p>
+<table><tr><th>프로젝트</th><th>이슈</th><th>우선순위</th><th>상태</th><th>담당자</th><th>PM</th>
+<th>시작일</th><th>완료예정일</th><th>착수일</th><th>완료일</th><th>진척도</th></tr>
+{_issue_rows_html(snapshot['issues'])}
+</table>
 
 <h2>🔴 지연 ({len(overdue)}건)</h2>
 <table><tr><th>프로젝트</th><th>이슈</th><th>담당자</th><th>마감일</th></tr>
