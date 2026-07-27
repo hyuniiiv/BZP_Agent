@@ -43,14 +43,16 @@ def _fetch_json(page, path: str) -> dict:
 
 
 def fetch_projects(pms_id: str, pms_pw: str) -> list[dict]:
-    """[{code, name, clientName, status, pmoUserName}, ...] 반환."""
+    """"프로젝트 관리 — 프로젝트 현황"과 동일한 소스(/api/bzp/projects)에서 조회.
+    [{code, name, clientName, status, contractDate, pmoUserName, pmUserName}, ...] 반환.
+    주의: PMO(pmoUserName)와 PM(pmUserName)은 서로 다른 사람일 수 있다(실측 확인됨) — 혼동 금지."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
             page = browser.new_page()
             _login(page, pms_id, pms_pw)
-            resp = _fetch_json(page, "/api/bzp/dashboard/projects")
-            return (resp.get("data") or {}).get("projects") or []
+            resp = _fetch_json(page, "/api/bzp/projects")
+            return resp.get("data") or []
         finally:
             browser.close()
 
@@ -72,16 +74,17 @@ PRIORITY_LABELS = {"0": "낮음", "1": "보통", "2": "높음", "3": "긴급"}
 def fetch_snapshot(pms_id: str, pms_pw: str, project_codes: list[str], upcoming_days: int = 3) -> dict:
     """한 번 로그인으로 '프로젝트 현황'과 '이슈관리 통합조회'를 함께 가져와 종합한다.
     project_codes 비우면 전체 프로젝트 대상. 반환:
-    {"projects": [{code,name,clientName,status,contractDate,pmoUserName}, ...] (필터 적용됨),
+    {"projects": [{code,name,clientName,status,contractDate,pmoUserName,pmUserName}, ...] (필터 적용됨),
      "issues": [...전체 목록...], "issue_total": int, "issue_status_counts": {"대기":N, ...},
      "overdue": [...], "upcoming": [...]} — 각 이슈 항목은
-    {"project","title","priority","status","assignee","pm","start","due","actual_start","actual_end","progress","link"}."""
+    {"project","title","priority","status","assignee","pm","start","due","actual_start","actual_end","progress","link"}.
+    PMO와 PM은 서로 다른 사람일 수 있다(실측 확인됨) — 이슈의 "pm"은 반드시 pmUserName에서 가져온다."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
             page = browser.new_page()
             _login(page, pms_id, pms_pw)
-            proj_resp = _fetch_json(page, "/api/bzp/dashboard/projects")
+            proj_resp = _fetch_json(page, "/api/bzp/projects")
             path = (
                 f"/api/bzp/tasks/section?sectionTitle={quote(ISSUE_SECTION)}"
                 f"&projectType={quote(PROJECT_TYPE)}&page=1&size=200"
@@ -90,12 +93,12 @@ def fetch_snapshot(pms_id: str, pms_pw: str, project_codes: list[str], upcoming_
         finally:
             browser.close()
 
-    all_projects = (proj_resp.get("data") or {}).get("projects") or []
+    all_projects = proj_resp.get("data") or []
     items = (issue_resp.get("data") or {}).get("items") or []
 
     code_filter = set(project_codes) if project_codes else None
     projects = [p for p in all_projects if code_filter is None or p.get("code") in code_filter]
-    pmo_by_code = {p.get("code"): p.get("pmoUserName", "") for p in all_projects}
+    pm_by_code = {p.get("code"): p.get("pmUserName", "") for p in all_projects}
     filtered_items = [it for it in items if code_filter is None or it.get("projectCode") in code_filter]
 
     today = date.today()
@@ -110,7 +113,7 @@ def fetch_snapshot(pms_id: str, pms_pw: str, project_codes: list[str], upcoming_
             "priority": PRIORITY_LABELS.get(it.get("priority"), "-"),
             "status": status_label,
             "assignee": it.get("author", ""),
-            "pm": pmo_by_code.get(it.get("projectCode"), ""),
+            "pm": pm_by_code.get(it.get("projectCode"), ""),
             "start": _parse_ymd(it.get("startDt")),
             "due": due,
             "actual_start": _parse_ymd(it.get("actualStartDt")),
@@ -184,15 +187,16 @@ def _issue_rows_html(issues: list[dict]) -> str:
 
 def _project_rows_html(projects: list[dict]) -> str:
     if not projects:
-        return '<tr><td colspan="5" class="empty">해당 없음</td></tr>'
+        return '<tr><td colspan="6" class="empty">해당 없음</td></tr>'
     out = []
     for p in projects:
         out.append(
             "<tr><td>{code}</td><td>{client}</td><td>{name}</td><td>{status}</td>"
-            "<td>{contract}</td><td>{pmo}</td></tr>".format(
+            "<td>{contract}</td><td>{pmo}</td><td>{pm}</td></tr>".format(
                 code=html.escape(p.get("code", "")), client=html.escape(p.get("clientName", "")),
                 name=html.escape(p.get("name", "")), status=html.escape(p.get("status", "")),
                 contract=html.escape(p.get("contractDate") or "-"), pmo=html.escape(p.get("pmoUserName", "")),
+                pm=html.escape(p.get("pmUserName", "")),
             )
         )
     return "\n".join(out)
@@ -227,7 +231,7 @@ def write_report_html(path, snapshot: dict) -> None:
 
 <h2>프로젝트 관리 — 프로젝트 현황</h2>
 <p class="summary">모니터링 대상 {len(projects)}개 프로젝트</p>
-<table><tr><th>코드</th><th>고객명</th><th>프로젝트명</th><th>상태</th><th>계약일자</th><th>PMO</th></tr>
+<table><tr><th>코드</th><th>고객명</th><th>프로젝트명</th><th>상태</th><th>계약일자</th><th>PMO</th><th>PM</th></tr>
 {_project_rows_html(projects)}
 </table>
 
