@@ -22,7 +22,7 @@ lab_dev:
   enabled: false
   repo: ''
   url: http://localhost:3003
-  command: pnpm lab dev
+  command: pnpm dev
   ports:
   - 3003
   - 4401

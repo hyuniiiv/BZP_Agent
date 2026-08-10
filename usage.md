@@ -17,14 +17,15 @@
 
 ## 2. 실행 / 자동 시작
 
-- **자동 시작**: 시작프로그램(`shell:startup`)의 `NetworkAuthTray.lnk`가
-  `pythonw.exe "D:\network_auth\network_auth_tray.py"`를 실행한다 (콘솔 없음).
-  → **소스(.py)를 직접 실행**하므로 코드 수정 시 재빌드 불필요, 재시작만 하면 반영된다.
-- **수동 실행**: `pythonw D:\network_auth\network_auth_tray.py`
-- **재시작(코드 반영)**:
+- **자동 시작**: 시작프로그램(`shell:startup`)의 `BZP_Agent.lnk`가
+  `%LOCALAPPDATA%\BZP_Agent\BZP_Agent.exe`(빌드본)를 실행한다 (콘솔 없음).
+  → 배포본 실행이므로 코드 수정 시 재빌드+업데이트가 필요하다(자동 업데이트 참고).
+- **개발 중 소스 직접 실행**: `pythonw D:\BZP_Agent\network_auth_tray.py`
+  → 코드 수정 시 재빌드 불필요, 재시작만 하면 반영된다.
+- **재시작(소스 실행 중 코드 반영)**:
   ```powershell
   Get-Process pythonw | Where-Object { (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -like '*network_auth_tray*' } | Stop-Process -Force
-  Start-Process pythonw.exe -ArgumentList "D:\network_auth\network_auth_tray.py" -WorkingDirectory "D:\network_auth"
+  Start-Process pythonw.exe -ArgumentList "D:\BZP_Agent\network_auth_tray.py" -WorkingDirectory "D:\BZP_Agent"
   ```
 - **배포본(exe) 빌드**(선택): `pyinstaller NetworkAuthTray.spec` → `dist\NetworkAuthTray\`
 
@@ -73,7 +74,7 @@ lab_dev:
   enabled: true
   repo: D:\bzpExpense\new-frontend
   url: http://localhost:3003
-  command: pnpm lab dev
+  command: pnpm dev
   ports: [3003, 4401]      # 재실행 시 정리할 포트 (lab, lab-api)
   check_interval: 60       # 헬스체크 주기(초)
 ```
@@ -101,7 +102,7 @@ lab_dev:
 
 ### lab dev 감시
 - 60초마다 3003 응답 확인. 살아 있으면 건드리지 않음.
-- 죽었으면 3003·4401 포트 점유 프로세스를 트리 종료 후 `pnpm lab dev` 백그라운드 실행.
+- 죽었으면 3003·4401 포트 점유 프로세스를 트리 종료 후 `pnpm dev` 백그라운드 실행.
 - 재실행 직후 90초(부팅 유예)는 재시작 판정 보류(재시작 루프 방지).
 
 ---
@@ -113,7 +114,7 @@ lab_dev:
 | `network_auth_tray.log` | 인증 체크·앱 전반 |
 | `git_sync.log` | 동기화 결과 |
 | `lab_dev.log` | lab 감시 이벤트(재실행 등) |
-| `lab_dev_server.log` | `pnpm lab dev` 서버 stdout/stderr |
+| `lab_dev_server.log` | `pnpm dev` 서버 stdout/stderr |
 
 - 모든 로그는 **로테이션**(파일당 2MB × 백업 3개)으로 무한 증가를 막는다.
 
@@ -131,10 +132,11 @@ git -C D:\bzpExpense\new-frontend stash list            # auto-sync 항목 확�
 git -C D:\bzpExpense\new-frontend stash apply "stash@{0}"  # (충돌 없으면) 복원
 git -C D:\bzpExpense\new-frontend stash drop  "stash@{0}"  # 복원 확인 후 제거
 ```
-(위치·메시지로 추측해서 pop하지 말 것. 반드시 내용 확인 후 apply.)
+(이 경로는 `git_sync`/`lab_dev` 대상 저장소 `D:\bzpExpense\new-frontend`이며, `D:\BZP_Agent`(앱 소스)와는 별개다.
+위치·메시지로 추측해서 pop하지 말 것. 반드시 내용 확인 후 apply.)
 
 **lab 3003이 안 뜬다**
-→ `logs/lab_dev_server.log`에서 `pnpm lab dev` 오류 확인. 포트 점유:
+→ `logs/lab_dev_server.log`에서 `pnpm dev` 오류 확인. 포트 점유:
 ```powershell
 Get-NetTCPConnection -State Listen -LocalPort 3003,4401
 ```

@@ -413,7 +413,7 @@ def main():
             repo=lab_cfg.get("repo", ""),
             url=lab_cfg.get("url", "http://localhost:3003"),
             ports=lab_cfg.get("ports", [3003, 4401]),
-            command=lab_cfg.get("command", "pnpm lab dev"),
+            command=lab_cfg.get("command", "pnpm dev"),
             log_path=LAB_DEV_SERVER_LOG,
             show_console=lab_cfg.get("show_console", False),
         )
