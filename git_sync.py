@@ -210,6 +210,89 @@ def sync(repo_path, remote_ref: str = "origin/main", target_branch: str | None =
     return SyncResult(True, f"'{target_branch}' " + _summarize(repo, target_local, remote) + note, changed=True)
 
 
+def sync_current_branch(repo_path, remote_ref: str = "origin/main") -> SyncResult:
+    """현재 체크아웃된 브랜치(작업 브랜치)에 remote_ref를 병합한다.
+
+    sync()와 달리 대상이 '지금 있는 브랜치 그 자체'다. 작업 브랜치는 원격 main과
+    갈라져 있는 게 정상이라 실제 3-way merge가 필요할 수 있는데, 무인 실행 중 충돌이 나면
+    저장소가 충돌 상태로 멈춰버려 위험하다. 그래서 실제로 건드리기 전에
+    `git merge-tree --write-tree`로 워킹트리/인덱스를 건드리지 않는 드라이런 병합을 먼저 하고,
+    충돌 없이 깨끗할 때만 진짜 병합을 수행한다. 충돌이 예상되면 아무것도 건드리지 않고
+    needs_attention만 반환한다(항상 사람이 직접 해결).
+
+    detached HEAD면 대상 브랜치가 불분명하므로 건드리지 않는다.
+    """
+    repo = str(repo_path)
+    if not Path(repo, ".git").exists():
+        return SyncResult(False, f"git 저장소가 아님: {repo}")
+
+    try:
+        fetch = _git(repo, "fetch", "origin", timeout=FETCH_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return SyncResult(False, "fetch 타임아웃 — 네트워크 확인 필요")
+    if fetch.returncode != 0:
+        return SyncResult(False, f"fetch 실패: {fetch.stderr.strip()}")
+
+    current_name = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    if current_name == "HEAD":
+        return SyncResult(False, "detached HEAD 상태 — 작업 브랜치 동기화 건너뜀", needs_attention=True)
+
+    remote = _git(repo, "rev-parse", remote_ref).stdout.strip()
+    if not remote:
+        return SyncResult(False, f"원격 참조 확인 불가: {remote_ref}")
+    current = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    if current == remote:
+        return SyncResult(True, f"'{current_name}' 이미 {remote_ref}과 동일", changed=False)
+
+    already_contains = _git(repo, "merge-base", "--is-ancestor", remote, current)
+    if already_contains.returncode == 0:
+        return SyncResult(True, f"'{current_name}'에 {remote_ref} 이미 반영됨", changed=False)
+
+    # 드라이런: 워킹트리/인덱스를 전혀 건드리지 않고 병합 가능 여부만 확인
+    dry_run = _git(repo, "merge-tree", "--write-tree", current, remote)
+    if dry_run.returncode != 0:
+        return SyncResult(
+            False,
+            f"'{current_name}' ← {remote_ref} 자동 병합 시 충돌 예상 — 작업 브랜치 미변경, 수동 병합 필요.",
+            needs_attention=True,
+        )
+
+    status = _git(repo, "status", "--porcelain")
+    if status.returncode != 0:
+        return SyncResult(False, f"git status 실패: {status.stderr.strip()}")
+    stashed = False
+    if _has_tracked_changes(status.stdout):
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        push = _git(repo, "stash", "push", "-m", f"auto-sync-branch {stamp}")
+        if push.returncode != 0:
+            return SyncResult(False, f"작업 대피(stash) 실패: {push.stderr.strip()}")
+        stashed = True
+        logger.info(f"'{current_name}' 트래킹 수정 대피 완료 (stash push)")
+
+    merge = _git(repo, "merge", "--no-edit", remote_ref)
+    if merge.returncode != 0:
+        # 드라이런은 깨끗했는데 실제 병합이 실패한 예외적인 경우 — 대피만 복원하고 알림
+        _restore_stash(repo, stashed)
+        return SyncResult(
+            False,
+            f"'{current_name}' 병합 실패(드라이런 이후 상태 변경 가능성): {merge.stderr.strip()}",
+            needs_attention=True,
+        )
+
+    if stashed:
+        pop = _git(repo, "stash", "pop")
+        if pop.returncode != 0:
+            return SyncResult(
+                False,
+                f"'{current_name}' 병합은 완료됐으나 작업 복원(stash pop) 충돌 — stash에 보존됨. 수동 확인 필요.",
+                needs_attention=True,
+            )
+        logger.info(f"'{current_name}' 대피 작업 복원 완료 (stash pop)")
+
+    return SyncResult(True, f"'{current_name}' " + _summarize(repo, current, remote), changed=True)
+
+
 def _summarize(repo: str, before: str, after: str) -> str:
     """반영된 커밋 수·변경 파일 수를 사람이 읽기 좋은 한 줄로 요약 (파일명 나열 대신)."""
     commits = _git(repo, "rev-list", "--count", f"{before}..{after}").stdout.strip() or "?"

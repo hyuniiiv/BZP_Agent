@@ -517,17 +517,33 @@ def main():
                 git_cfg.get("repo", ""),
                 git_cfg.get("remote_ref", "origin/main"),
             )
+            branch_result = None
+            if git_cfg.get("sync_current_branch", False):
+                branch_result = git_sync.sync_current_branch(
+                    git_cfg.get("repo", ""),
+                    git_cfg.get("remote_ref", "origin/main"),
+                )
+                logging.getLogger("git_sync").info(f"작업 브랜치 결과: {branch_result}")
             state.git_last = datetime.now()
             state.git_message = result.message
             state.git_status = "attention" if result.needs_attention else ("ok" if result.ok else "idle")
+            if branch_result is not None and branch_result.needs_attention:
+                state.git_status = "attention"
+                state.git_message = branch_result.message
             refresh()
             logging.getLogger("git_sync").info(f"결과: {result}")
             if result.needs_attention:
                 notify("GitLab 동기화 — 수동 확인 필요", result.message)
             elif result.ok and notify_ok:
                 notify("GitLab 동기화", result.message)
+            if branch_result is not None:
+                if branch_result.needs_attention:
+                    notify("작업 브랜치 자동 병합 — 수동 확인 필요", branch_result.message)
+                elif branch_result.ok and branch_result.changed and notify_ok:
+                    notify("작업 브랜치 자동 병합", branch_result.message)
             # 실제 변경이 반영됐을 때만 dev 서버 재기동 (HMR이 새 파일·삭제·의존성 변경은 못 따라잡음)
-            if result.ok and result.changed and lab_monitor is not None:
+            changed = result.changed or (branch_result is not None and branch_result.changed)
+            if result.ok and changed and lab_monitor is not None:
                 restart = lab_monitor.ensure_running(force=True, reason="GitLab 변경 반영")
                 state.lab_message = _lab_status_label(restart)
                 state.lab_status = "error" if restart.action == "error" else "ok"
