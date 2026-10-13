@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from login_guard import LoginGuard
 from network_auth import is_rejection_text
+from settings_store import format_guard_status
 
 
 class LoginGuardTest(unittest.TestCase):
@@ -59,6 +60,43 @@ class LoginGuardTest(unittest.TestCase):
         guard = LoginGuard(self.path, max_failures=0)
         guard.record_failure("id", "pw")
         self.assertTrue(guard.is_blocked("id", "pw"))
+
+    def test_status_reports_count_and_blocked(self):
+        self.guard.record_failure("id", "pw")
+        st = self.guard.status("id", "pw")
+        self.assertEqual((st["failures"], st["max_failures"], st["blocked"]), (1, 2, False))
+        self.guard.record_failure("id", "pw")
+        self.assertTrue(self.guard.status("id", "pw")["blocked"])
+
+    def test_status_is_zero_for_other_credentials(self):
+        self.guard.record_failure("id", "old")
+        st = self.guard.status("id", "new")
+        self.assertEqual((st["failures"], st["last_failure"]), (0, ""))
+
+    def test_reset_clears_blocked_state(self):
+        self.guard.record_failure("id", "pw")
+        self.guard.record_failure("id", "pw")
+        self.guard.reset()
+        self.assertFalse(self.guard.is_blocked("id", "pw"))
+        self.assertEqual(self.guard.status("id", "pw")["failures"], 0)
+
+    def test_reset_without_state_file_is_noop(self):
+        self.guard.reset()
+
+
+class GuardStatusFormatTest(unittest.TestCase):
+    def test_normal_state(self):
+        text, blocked = format_guard_status({"failures": 0, "max_failures": 2, "blocked": False, "last_failure": ""})
+        self.assertEqual(text, "연속 거부 0회 / 한도 2회")
+        self.assertFalse(blocked)
+
+    def test_blocked_state_shows_last_failure(self):
+        text, blocked = format_guard_status(
+            {"failures": 2, "max_failures": 2, "blocked": True, "last_failure": "2026-10-13T10:00:00"}
+        )
+        self.assertIn("자동 로그인 중단 중", text)
+        self.assertIn("2026-10-13 10:00:00", text)
+        self.assertTrue(blocked)
 
 
 class RejectionTextTest(unittest.TestCase):

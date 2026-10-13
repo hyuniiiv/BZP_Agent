@@ -8,7 +8,7 @@
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 
 import settings_store as store
 import pms_client
@@ -74,6 +74,43 @@ def main():
     peak_iv = tk.StringVar(value=store.interval_label(data["auth_peak_interval"]))
     ttk.Combobox(peak_frame, textvariable=peak_iv, values=poll_labels, state="readonly", width=8).pack(side="left")
     ttk.Label(f_auth, text='형식 "HH:MM-HH:MM" (비우면 미사용)', foreground="gray").grid(row=8, column=1, sticky="w", padx=8)
+
+    # 계정 잠금 방지: 연속 거부 횟수 표시 + 초기화 (서버가 명확히 거부한 경우만 집계)
+    ttk.Separator(f_auth, orient="horizontal").grid(row=9, column=0, columnspan=2, sticky="ew", padx=8, pady=6)
+    ttk.Label(f_auth, text="로그인 거부").grid(row=10, column=0, sticky="e", **pad)
+    guard_frame = ttk.Frame(f_auth)
+    guard_frame.grid(row=10, column=1, sticky="w", **pad)
+    guard_label = ttk.Label(guard_frame, text="")
+    guard_label.pack(side="left")
+
+    def refresh_guard():
+        try:
+            text, blocked = store.format_guard_status(store.load_guard_status(data["auth_max_failures"]))
+        except Exception as exc:
+            text, blocked = f"상태 확인 실패: {exc}", False
+        guard_label.config(text=text, foreground="red" if blocked else "green")
+
+    def reset_guard():
+        if not messagebox.askyesno(
+            "거부 횟수 초기화",
+            "연속 거부 횟수를 0으로 초기화하고 자동 로그인을 다시 허용합니다.\n\n"
+            "저장된 비밀번호가 여전히 틀린 상태라면 다시 시도하다 계정이 잠길 수 있습니다.\n"
+            "비밀번호를 먼저 확인했나요?",
+            parent=root,
+        ):
+            return
+        store.reset_guard()
+        refresh_guard()
+
+    ttk.Button(guard_frame, text="초기화", width=8, command=reset_guard).pack(side="left", padx=(8, 0))
+    ttk.Label(f_auth, text="한도 (회)").grid(row=11, column=0, sticky="e", **pad)
+    max_fail_frame = ttk.Frame(f_auth)
+    max_fail_frame.grid(row=11, column=1, sticky="w", **pad)
+    max_fail_var = tk.StringVar(value=str(data["auth_max_failures"]))
+    ttk.Spinbox(max_fail_frame, from_=1, to=10, textvariable=max_fail_var, width=4).pack(side="left")
+    ttk.Label(max_fail_frame, text="서버가 ID/PW를 거부한 횟수가 한도에 닿으면 자동 로그인 중단 (ID/PW를 바꿔 저장해도 해제)",
+              foreground="gray").pack(side="left", padx=(8, 0))
+    refresh_guard()
 
     # ── GitLab 동기화 ─────────────────────
     f_git = ttk.LabelFrame(root, text="GitLab 동기화")
@@ -222,6 +259,7 @@ def main():
             "auth_interval": store.label_interval(auth_iv.get(), 180),
             "auth_peak_interval": store.label_interval(peak_iv.get(), 60),
             "auth_peak_window": peak_win.get().strip(),
+            "auth_max_failures": int(max_fail_var.get().strip() or data["auth_max_failures"]),
             "git_enabled": git_on.get(),
             "git_repo": git_repo.get().strip(),
             "git_times": [v.get() for v in git_time_vars],

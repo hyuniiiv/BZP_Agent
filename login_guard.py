@@ -18,6 +18,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_FAILURES = 2
+GUARD_FILENAME = "network_auth_guard.json"  # <앱 폴더>/data/ 아래에 저장
 
 
 def _fingerprint(user_id: str, password: str) -> str:
@@ -66,10 +67,26 @@ class LoginGuard:
         })
         return count
 
-    def record_success(self) -> None:
-        """인증 성공 — 카운터 초기화."""
+    def status(self, user_id: str, password: str) -> dict:
+        """환경설정 화면 표시용 상태 (현재 자격증명 기준)."""
+        state = self._load()
+        matches = state.get("fingerprint") == _fingerprint(user_id, password)
+        failures = int(state.get("failures", 0)) if matches else 0
+        return {
+            "failures": failures,
+            "max_failures": self._max_failures,
+            "blocked": failures >= self._max_failures,
+            "last_failure": state.get("last_failure", "") if matches else "",
+        }
+
+    def reset(self) -> None:
+        """실패 카운터 초기화 (인증 성공 시 / 환경설정의 '초기화' 버튼)."""
         if self._path.exists():
             try:
                 self._path.unlink()
             except Exception as e:
                 logger.warning(f"로그인 가드 상태 삭제 실패: {e}")
+
+    def record_success(self) -> None:
+        """인증 성공 — 카운터 초기화."""
+        self.reset()

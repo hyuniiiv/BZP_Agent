@@ -10,8 +10,11 @@ from pathlib import Path
 
 import yaml
 
+from login_guard import DEFAULT_MAX_FAILURES, GUARD_FILENAME, LoginGuard
+
 BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
+GUARD_PATH = BASE_DIR / "data" / GUARD_FILENAME
 
 # 앱 표시 이름 (트레이 툴팁·창 제목·매뉴얼 공용)
 APP_NAME = "BZP Agent"
@@ -157,6 +160,7 @@ def load_settings() -> dict:
         "auth_interval": int(na.get("check_interval", 180)),
         "auth_peak_interval": int(na.get("peak_interval", 60)),
         "auth_peak_window": peak_windows[0] if peak_windows else "",
+        "auth_max_failures": int(na.get("max_login_failures", DEFAULT_MAX_FAILURES)),
         "git_enabled": bool(gs.get("enabled", True)),
         "git_repo": gs.get("repo", ""),
         "git_times": load_git_times(gs),
@@ -188,6 +192,7 @@ def save_settings(values: dict) -> None:
     na["peak_interval"] = int(values["auth_peak_interval"])
     window = (values.get("auth_peak_window") or "").strip()
     na["peak_windows"] = [window] if window else []
+    na["max_login_failures"] = max(1, int(values.get("auth_max_failures", DEFAULT_MAX_FAILURES)))
 
     gs = cfg.setdefault("git_sync", {})
     gs["enabled"] = bool(values["git_enabled"])
@@ -228,3 +233,30 @@ def save_settings(values: dict) -> None:
     if pms_id:
         pms_pw = values.get("pms_account_pw") or load_env_value("PMS_PW")
         save_env_pairs({"PMS_ID": pms_id, "PMS_PW": pms_pw})
+
+
+# ── 로그인 실패(계정 잠금 방지) 상태 ─────────────────────────────
+
+def _guard(max_failures: int) -> LoginGuard:
+    return LoginGuard(GUARD_PATH, max_failures)
+
+
+def load_guard_status(max_failures: int = DEFAULT_MAX_FAILURES) -> dict:
+    """.env에 저장된 현재 계정 기준의 연속 거부 횟수/중단 여부."""
+    from credentials_dialog import load_current_id, load_current_pw
+    return _guard(max_failures).status(load_current_id(), load_current_pw())
+
+
+def reset_guard() -> None:
+    """연속 거부 카운터를 초기화한다 (중단 상태 해제)."""
+    _guard(DEFAULT_MAX_FAILURES).reset()
+
+
+def format_guard_status(status: dict) -> tuple[str, bool]:
+    """상태 dict → (표시 문구, 중단 여부)."""
+    text = f"연속 거부 {status['failures']}회 / 한도 {status['max_failures']}회"
+    if status["blocked"]:
+        text += " — 자동 로그인 중단 중"
+    if status.get("last_failure"):
+        text += f" (마지막 거부 {status['last_failure'].replace('T', ' ')})"
+    return text, bool(status["blocked"])

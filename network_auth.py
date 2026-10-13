@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 import httpx
 from dotenv import load_dotenv
 
-from login_guard import DEFAULT_MAX_FAILURES, LoginGuard
+from login_guard import DEFAULT_MAX_FAILURES, GUARD_FILENAME, LoginGuard
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ _DEFAULT_URL = "http://172.28.200.250/cwp2/faces/common/userAuth.xhtml"
 _AUTHENTICATED_TEXT = "인증사용자"
 _SESSION_FILE = _BASE_DIR / "data" / "network_auth_session.json"
 _ENV_FILE = _BASE_DIR / ".env"
-_GUARD_FILE = _BASE_DIR / "data" / "network_auth_guard.json"
+_GUARD_FILE = _BASE_DIR / "data" / GUARD_FILENAME
 _REJECTED_TEXT = "사용자 인증에 실패하였습니다"  # 서버가 ID/PW를 거부할 때 같은 페이지에 표시하는 문구
 _DIAG_SNIPPET_LEN = 300  # 실패 응답 진단 로그에 남길 본문 길이
 
