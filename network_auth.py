@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 import httpx
 from dotenv import load_dotenv
 
+from login_guard import DEFAULT_MAX_FAILURES, LoginGuard
+
 logger = logging.getLogger(__name__)
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
@@ -26,6 +28,14 @@ _DEFAULT_URL = "http://172.28.200.250/cwp2/faces/common/userAuth.xhtml"
 _AUTHENTICATED_TEXT = "인증사용자"
 _SESSION_FILE = _BASE_DIR / "data" / "network_auth_session.json"
 _ENV_FILE = _BASE_DIR / ".env"
+_GUARD_FILE = _BASE_DIR / "data" / "network_auth_guard.json"
+_REJECTED_TEXT = "사용자 인증에 실패하였습니다"  # 서버가 ID/PW를 거부할 때 같은 페이지에 표시하는 문구
+_DIAG_SNIPPET_LEN = 300  # 실패 응답 진단 로그에 남길 본문 길이
+
+
+def is_rejection_text(text: str) -> bool:
+    """응답 본문에 서버의 ID/PW 거부 문구가 있는지."""
+    return _REJECTED_TEXT in " ".join(text.split())
 
 
 class NetworkAuthenticator:
@@ -42,6 +52,8 @@ class NetworkAuthenticator:
         self._run_hour_end = cfg.get("run_hour_end", 9)        # 실행 종료 시각 (기본 9시)
         self._user_id = ""
         self._password = ""
+        # 계정 잠금 방지: 같은 자격증명으로 연속 실패가 한도에 도달하면 자동 로그인 중단
+        self._guard = LoginGuard(_GUARD_FILE, cfg.get("max_login_failures", DEFAULT_MAX_FAILURES))
         self._refresh_credentials()
         self._id_field = cfg.get("id_field", "")
         self._pw_field = cfg.get("pw_field", "")
@@ -58,6 +70,13 @@ class NetworkAuthenticator:
             logger.warning(f"자격증명 새로고침 실패: {e}")
         self._user_id = os.environ.get("NETWORK_ID", "")
         self._password = os.environ.get("NETWORK_PW", "")
+
+    def is_login_blocked(self) -> bool:
+        """연속 실패로 자동 로그인이 중단된 상태인지 (.env의 최신 자격증명 기준)."""
+        self._refresh_credentials()
+        if not self._user_id or not self._password:
+            return False
+        return self._guard.is_blocked(self._user_id, self._password)
 
     # ──────────────────────────────────────────────
     # 브라우저 초기화 / 정리
@@ -271,6 +290,14 @@ class NetworkAuthenticator:
             logger.warning("NETWORK_ID 또는 NETWORK_PW 환경변수가 설정되지 않았습니다")
             return False
 
+        # 계정 잠금 방지 — 같은 자격증명으로 연속 실패했다면 더 이상 시도하지 않는다
+        if self._guard.is_blocked(self._user_id, self._password):
+            logger.error(
+                "🛑 자동 로그인 중단 — 같은 계정 정보로 연속 인증 실패. 계정 잠금 방지를 위해 "
+                "재시도하지 않습니다. 환경설정에서 ID/PW를 갱신하면 다시 시도합니다."
+            )
+            return False
+
         # ID 필드 셀렉터 결정
         if self._id_field:
             id_sel = f'[name="{self._id_field}"]'
@@ -311,10 +338,39 @@ class NetworkAuthenticator:
 
         if await self._is_authenticated():
             logger.info("✅ 네트워크 인증 성공")
+            # 자격증명이 실제로 통과한 경우에만 카운터 초기화 (기존 세션 유지/수동 로그인은 자격증명 검증이 아님)
+            self._guard.record_success()
             return True
+
+        if await self._log_failure_page():
+            logger.warning("⚠️ 네트워크 인증 실패 — 서버가 ID/PW를 거부했습니다 (비밀번호 변경 여부 확인)")
+            self._record_login_failure()
         else:
-            logger.warning("⚠️ 네트워크 인증 실패 — ID/PW를 확인하세요")
+            # 서버의 거부 문구가 확인된 경우만 계정 잠금 방지 카운트에 포함한다
+            logger.warning("⚠️ 네트워크 인증 실패 — 거부 문구 미확인(원인 불명), 실패 횟수에는 집계하지 않음")
+        return False
+
+    async def _log_failure_page(self) -> bool:
+        """실패 응답 페이지를 진단 로그로 남기고, 서버의 거부 문구가 있었는지 반환한다.
+        (제출한 ID/PW 값은 기록하지 않고, 본문에 비밀번호가 있으면 가린다.)"""
+        try:
+            text = await self._page.inner_text("body", timeout=3000)
+            snippet = " ".join(text.split())[:_DIAG_SNIPPET_LEN]
+            if self._password:
+                snippet = snippet.replace(self._password, "***")
+            logger.warning(f"인증 실패 응답 진단 — url={self._page.url} body='{snippet}'")
+            return is_rejection_text(text)
+        except Exception as e:
+            logger.warning(f"인증 실패 응답 진단 실패: {e}")
             return False
+
+    def _record_login_failure(self):
+        """서버가 거부한 로그인 실패를 기록하고, 한도 도달 시 중단 사실을 로그에 남긴다."""
+        count = self._guard.record_failure(self._user_id, self._password)
+        if self._guard.is_blocked(self._user_id, self._password):
+            logger.error(f"🛑 연속 {count}회 인증 실패 — 계정 잠금 방지를 위해 자동 로그인을 중단합니다")
+        else:
+            logger.warning(f"인증 실패 누적 {count}회")
 
     async def _find_selector(self, candidates: list[str]) -> str:
         """후보 셀렉터 중 실제 존재하는 첫 번째 반환"""

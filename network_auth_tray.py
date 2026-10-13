@@ -54,6 +54,8 @@ import pms_client
 # 업데이트 확인 주기(초): 시작 시 1회 + 이후 하루 1회
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60
 
+BLOCKED_MESSAGE = "자동 로그인 중단 — ID/PW 확인 후 환경설정에서 갱신"
+
 LOG_FILE = BASE_DIR / "logs" / "network_auth_tray.log"
 LOG_FILE.parent.mkdir(exist_ok=True)
 GIT_SYNC_LOG = BASE_DIR / "logs" / "git_sync.log"
@@ -157,6 +159,7 @@ class TrayState:
         self.last_checked: datetime | None = None
         self.last_message = "시작 중..."
         self.busy = False  # True인 동안은 경량 루프가 상태를 덮어쓰지 않음
+        self.block_notified = False  # 자동 로그인 중단 알림을 이미 보냈는지
         # self.status = 인증(network_auth) 상태: checking/ok/fail/idle/off
         # 부가 기능 상태 (트레이 메뉴 표시용 + 아이콘 종합 계산용)
         self.git_last: datetime | None = None
@@ -244,17 +247,34 @@ async def do_check(authenticator: NetworkAuthenticator, icon: pystray.Icon, stat
     else:
         state.last_message = "인증됨" if ok else "인증 실패 — 수동 확인 필요"
 
+    blocked = (not ok) and authenticator.is_login_blocked()
+    if blocked:
+        state.last_message = BLOCKED_MESSAGE
+
     state.status = "ok" if ok else "fail"
     state.last_checked = datetime.now()
     state.busy = False
     update_icon(icon, state)
     logger.info(f"인증 확인 결과: {state.last_message}")
 
-    if notify and not ok:
+    if blocked and not state.block_notified:
+        # 중단 상태 진입 시 1회만 알림 (이후 주기 체크마다 반복 알림 방지)
+        state.block_notified = True
+        try:
+            icon.notify(
+                "계정 잠금 방지를 위해 자동 로그인을 중단했습니다.\n"
+                "비밀번호 변경 등을 확인한 뒤 '환경설정'에서 ID/PW를 갱신하세요.",
+                "네트워크 인증 중단",
+            )
+        except Exception:
+            pass
+    elif notify and not ok and not blocked:
         try:
             icon.notify("네트워크 인증에 실패했습니다. 수동 확인이 필요합니다.", "네트워크 인증 실패")
         except Exception:
             pass
+    if ok or not blocked:
+        state.block_notified = False
 
 
 async def monitor_loop(authenticator: NetworkAuthenticator, config: dict, icon: pystray.Icon, state: TrayState, interval: int = 60):
@@ -314,6 +334,10 @@ async def monitor_loop(authenticator: NetworkAuthenticator, config: dict, icon: 
         if result is True:
             state.status = "ok"
             state.last_message = "인증됨"
+        elif result is False and authenticator.is_login_blocked():
+            # 계정 잠금 방지: 로그인이 중단된 상태에서는 브라우저를 띄워 재시도하지 않는다
+            state.status = "fail"
+            state.last_message = BLOCKED_MESSAGE
         elif result is False:
             logger.info("경량 체크에서 인증 끊어짐 감지 — 즉시 재로그인 시도")
             await do_check(authenticator, icon, state)
