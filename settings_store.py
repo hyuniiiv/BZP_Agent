@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from login_guard import DEFAULT_MAX_FAILURES, GUARD_FILENAME, LoginGuard
+from login_guard import DEFAULT_MAX_FAILURES, GUARD_FILENAME, MAX_ALLOWED_FAILURES, LoginGuard, clamp_max_failures
 
 BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
@@ -160,7 +160,7 @@ def load_settings() -> dict:
         "auth_interval": int(na.get("check_interval", 180)),
         "auth_peak_interval": int(na.get("peak_interval", 60)),
         "auth_peak_window": peak_windows[0] if peak_windows else "",
-        "auth_max_failures": int(na.get("max_login_failures", DEFAULT_MAX_FAILURES)),
+        "auth_max_failures": clamp_max_failures(na.get("max_login_failures", DEFAULT_MAX_FAILURES)),
         "git_enabled": bool(gs.get("enabled", True)),
         "git_repo": gs.get("repo", ""),
         "git_times": load_git_times(gs),
@@ -192,7 +192,7 @@ def save_settings(values: dict) -> None:
     na["peak_interval"] = int(values["auth_peak_interval"])
     window = (values.get("auth_peak_window") or "").strip()
     na["peak_windows"] = [window] if window else []
-    na["max_login_failures"] = max(1, int(values.get("auth_max_failures", DEFAULT_MAX_FAILURES)))
+    na["max_login_failures"] = clamp_max_failures(values.get("auth_max_failures", DEFAULT_MAX_FAILURES))
 
     gs = cfg.setdefault("git_sync", {})
     gs["enabled"] = bool(values["git_enabled"])

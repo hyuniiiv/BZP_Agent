@@ -103,11 +103,11 @@ def main():
         refresh_guard()
 
     ttk.Button(guard_frame, text="초기화", width=8, command=reset_guard).pack(side="left", padx=(8, 0))
-    ttk.Label(f_auth, text="한도 (회)").grid(row=11, column=0, sticky="e", **pad)
+    ttk.Label(f_auth, text="한도 (최대 5회)").grid(row=11, column=0, sticky="e", **pad)
     max_fail_frame = ttk.Frame(f_auth)
     max_fail_frame.grid(row=11, column=1, sticky="w", **pad)
     max_fail_var = tk.StringVar(value=str(data["auth_max_failures"]))
-    ttk.Spinbox(max_fail_frame, from_=1, to=10, textvariable=max_fail_var, width=4).pack(side="left")
+    ttk.Spinbox(max_fail_frame, from_=1, to=store.MAX_ALLOWED_FAILURES, textvariable=max_fail_var, width=4).pack(side="left")
     ttk.Label(max_fail_frame, text="서버가 ID/PW를 거부한 횟수가 한도에 닿으면 자동 로그인 중단 (ID/PW를 바꿔 저장해도 해제)",
               foreground="gray").pack(side="left", padx=(8, 0))
     refresh_guard()
@@ -259,7 +259,7 @@ def main():
             "auth_interval": store.label_interval(auth_iv.get(), 180),
             "auth_peak_interval": store.label_interval(peak_iv.get(), 60),
             "auth_peak_window": peak_win.get().strip(),
-            "auth_max_failures": int(max_fail_var.get().strip() or data["auth_max_failures"]),
+            "auth_max_failures": store.clamp_max_failures(max_fail_var.get().strip() or data["auth_max_failures"]),
             "git_enabled": git_on.get(),
             "git_repo": git_repo.get().strip(),
             "git_times": [v.get() for v in git_time_vars],

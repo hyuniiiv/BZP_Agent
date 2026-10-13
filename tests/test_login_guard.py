@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from login_guard import LoginGuard
+from login_guard import LoginGuard, clamp_max_failures
 from network_auth import is_rejection_text
 from settings_store import format_guard_status
 
@@ -82,6 +82,23 @@ class LoginGuardTest(unittest.TestCase):
 
     def test_reset_without_state_file_is_noop(self):
         self.guard.reset()
+
+    def test_max_failures_is_capped_at_five(self):
+        guard = LoginGuard(self.path, max_failures=99)
+        self.assertEqual(guard.status("id", "pw")["max_failures"], 5)
+        for _ in range(4):
+            guard.record_failure("id", "pw")
+        self.assertFalse(guard.is_blocked("id", "pw"))
+        guard.record_failure("id", "pw")
+        self.assertTrue(guard.is_blocked("id", "pw"))
+
+    def test_clamp_handles_invalid_values(self):
+        self.assertEqual(clamp_max_failures(5), 5)
+        self.assertEqual(clamp_max_failures(6), 5)
+        self.assertEqual(clamp_max_failures(0), 1)
+        self.assertEqual(clamp_max_failures("3"), 3)
+        self.assertEqual(clamp_max_failures("abc"), 2)
+        self.assertEqual(clamp_max_failures(None), 2)
 
 
 class GuardStatusFormatTest(unittest.TestCase):

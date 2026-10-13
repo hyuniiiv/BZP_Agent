@@ -9,7 +9,7 @@ network_auth:
   run_hour_start: 0
   run_hour_end: 24
   check_interval: 180
-  max_login_failures: 2  # 같은 계정으로 연속 N회 거부되면 자동 로그인 중단(계정 잠금 방지)
+  max_login_failures: 2  # 같은 계정으로 연속 N회 거부되면 자동 로그인 중단(계정 잠금 방지, 최대 5)
   peak_interval: 60
   peak_windows:
   - 04:55-05:15

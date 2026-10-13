@@ -18,7 +18,16 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_FAILURES = 2
+MAX_ALLOWED_FAILURES = 5  # 한도 상한 — 설정값이 이보다 커도 5회로 제한한다
 GUARD_FILENAME = "network_auth_guard.json"  # <앱 폴더>/data/ 아래에 저장
+
+
+def clamp_max_failures(value) -> int:
+    """한도를 1~MAX_ALLOWED_FAILURES 범위로 보정 (잘못된 값은 기본값)."""
+    try:
+        return min(max(1, int(value)), MAX_ALLOWED_FAILURES)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_FAILURES
 
 
 def _fingerprint(user_id: str, password: str) -> str:
@@ -28,7 +37,7 @@ def _fingerprint(user_id: str, password: str) -> str:
 class LoginGuard:
     def __init__(self, path: Path, max_failures: int = DEFAULT_MAX_FAILURES):
         self._path = path
-        self._max_failures = max(1, int(max_failures))
+        self._max_failures = clamp_max_failures(max_failures)
 
     def _load(self) -> dict:
         try:
